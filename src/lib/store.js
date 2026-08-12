@@ -159,8 +159,18 @@
    *                                 or reviewed later in the debrief)
    * @property {boolean} shaky      logged as "got it right" but only by guessing — counts like a
    *                                 miss for weak-area weighting
-   * @property {?('knew'|'unsure'|'guessed')} confidence  self-rated confidence, joined in from the
-   *                                 matching Outcome by fp at capture time if not set explicitly
+   * @property {?('knew'|'unsure'|'guessed'|'memorized')} confidence  self-rated confidence, joined
+   *                                 in from the matching Outcome by fp at capture time if not set
+   *                                 explicitly. 'memorized' = high certainty, zero reasoning (pure
+   *                                 answer-recognition on a reused question) — see focusTopics and
+   *                                 isStubborn-style graduation logic for how this discounts a right.
+   *
+   * NOTE on 'memorized' as a single-value field: once a fp is flagged
+   * memorized (via an Outcome or an explicit tagger save), that flag doesn't
+   * expire on its own even if you later genuinely learn the question — v1
+   * has no "un-memorize" signal. Accepted limitation; the reset path is a
+   * fresh miss (a new attempt re-triggers normal handling) or a manual edit
+   * of the record's confidence.
    */
 
   /**
@@ -173,7 +183,8 @@
    * @property {string} fp             fingerprint used to match repeats (same function as Miss.fp)
    * @property {string} questionSnippet  first 200 chars of the question text
    * @property {'correct'|'incorrect'} outcome
-   * @property {?('knew'|'unsure'|'guessed')} confidence  set once via the toast, first tap wins
+   * @property {?('knew'|'unsure'|'guessed'|'memorized')} confidence  set once via the toast, first
+   *                                 tap wins
    * @property {string} exam
    * @property {number} ts             epoch ms of the first detection
    * @property {number[]} attempts     every time this outcome was (re-)detected
@@ -209,6 +220,19 @@
     async getOutcomeByFp(fp) {
       if (!fp) return null;
       return (await read()).outcomes.find((o) => o.fp === fp) || null;
+    },
+
+    /**
+     * The existing MISS record for a fingerprint, if one exists. Distinct
+     * from findRepeat, which takes raw question text and computes the
+     * fingerprint itself — this takes an fp directly. Used by the outcomes
+     * toast to show a "seen before" honesty marker: a MISS already on file
+     * for this fp means the question is a repeat, exactly where a "correct"
+     * now is more likely recognition than reasoning.
+     */
+    async getMissByFp(fp) {
+      if (!fp) return null;
+      return (await read()).misses.find((m) => m.fp === fp) || null;
     },
 
     /**
@@ -461,14 +485,30 @@
      * question can cancel its own weight out, but it can't push a topic's
      * total negative. Pure — pass in the misses (and `now`, for testability)
      * you already have.
+     *
+     * `outcomes` (optional, default []) is the passive outcome log — used
+     * only to find fps flagged confidence:'memorized'. A memorized right is
+     * pure answer-recognition, not evidence you've learned the material, so
+     * it must not fake progress the way a genuine right does: for those fps
+     * the rights-decay subtraction is skipped entirely (miss attempts still
+     * count in full, same as if no right had ever happened). Omitted/empty
+     * `outcomes` reproduces the pre-existing behavior exactly — purely
+     * additive.
      */
-    focusTopics(misses, now = Date.now()) {
+    focusTopics(misses, now = Date.now(), outcomes = []) {
       const HALF_LIFE_DAYS = 14;
       const decay = (ts) => Math.pow(0.5, (now - ts) / 86400000 / HALF_LIFE_DAYS);
+      const memorizedFps = new Set(
+        (outcomes || [])
+          .filter((o) => o && o.fp && o.confidence === 'memorized')
+          .map((o) => o.fp)
+      );
       const counts = new Map();
       for (const m of misses) {
         const missWeight = (m.attempts || [m.ts]).reduce((sum, ts) => sum + decay(ts), 0);
-        const rightWeight = (m.rights || []).reduce((sum, ts) => sum + decay(ts), 0);
+        const rightWeight = memorizedFps.has(m.fp)
+          ? 0
+          : (m.rights || []).reduce((sum, ts) => sum + decay(ts), 0);
         const contribution = Math.max(0, missWeight - rightWeight);
         for (const t of m.topics || []) {
           const prev = counts.get(t) || { weight: 0, questions: new Set() };

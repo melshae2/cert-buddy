@@ -113,6 +113,14 @@
       border-style: dashed; background: transparent; color: var(--muted); margin-top: 8px;
     }
     .chip.shaky.on { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); }
+    /* Memorized chip: same outline-chip/warn family as shaky — both flag a
+       "right" that isn't solid evidence of learning, just for different
+       reasons (guessed vs. pure answer-recognition). Mutually exclusive with
+       shaky in JS, so only one is ever "on" at a time. */
+    .chip.memorized {
+      border-style: dashed; background: transparent; color: var(--muted); margin-top: 8px; margin-left: 6px;
+    }
+    .chip.memorized.on { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); }
     .hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
     .banner {
@@ -261,6 +269,7 @@
       <textarea id="notes" rows="2" placeholder="one honest sentence…"></textarea>
 
       <button type="button" class="chip shaky" id="shakyChip">guessed it (got it right)</button>
+      <button type="button" class="chip memorized" id="memorizedChip">memorized it (got it right)</button>
 
       <div class="full-only">
         <label class="f" for="question">Question</label>
@@ -321,8 +330,9 @@
   let autoTopics = [];
   let suggestedTopics = []; // score===1, non-concept — shown as ghost chips, not applied
   let shakyOn = false; // "guessed it (got it right)" toggle state
+  let memorizedOn = false; // "memorized it (got it right)" toggle state — mutually exclusive with shakyOn
   let outcomeSaysCorrect = false; // passive signal: the outcomes log already has this fp as correct
-  let isCorrectCapture = false; // shakyOn || outcomeSaysCorrect — gates the reason UI
+  let isCorrectCapture = false; // shakyOn || memorizedOn || outcomeSaysCorrect — gates the reason UI
   let lastExam = ''; // remembered across opens so you type the exam code once
   let badgeHidden = false; // this host is on the hidden list
   let suggIndex = -1;
@@ -467,6 +477,8 @@
     syncReasonButtons();
     shakyOn = false;
     renderShakyChip();
+    memorizedOn = false;
+    renderMemorizedChip();
     // Reset the passive signal before its lookup resolves, so a lingering
     // "correct" state from the previous question can't bleed into this one.
     outcomeSaysCorrect = false;
@@ -504,7 +516,7 @@
    * hatch hides since there's nothing left to escape from requiring.
    */
   function renderCorrectCapture() {
-    isCorrectCapture = shakyOn || outcomeSaysCorrect;
+    isCorrectCapture = shakyOn || memorizedOn || outcomeSaysCorrect;
     panel.classList.toggle('correct-capture', isCorrectCapture);
     $('correctHint').hidden = !isCorrectCapture;
     $('saveWithoutReason').hidden = isCorrectCapture;
@@ -602,10 +614,12 @@
         // an incorrect capture -> stays untriaged.
         triaged: isCorrectCapture || !!reason
       };
-      // The shaky chip IS a guessed declaration — say so explicitly. Any
-      // other capture leaves confidence absent so addMiss's own join can
-      // pull it from the matching outcome record instead.
+      // The shaky/memorized chips ARE explicit confidence declarations — say
+      // so directly. Mutually exclusive in the UI, so at most one of these
+      // fires. Any other capture leaves confidence absent so addMiss's own
+      // join can pull it from the matching outcome record instead.
       if (shakyOn) payload.confidence = 'guessed';
+      else if (memorizedOn) payload.confidence = 'memorized';
       const { repeat, attempt } = await Store.addMiss(payload);
       close();
       showToast(repeat ? `Attempt ${attempt} logged on a repeat ✓` : 'Miss logged ✓');
@@ -674,9 +688,27 @@
     $('shakyChip').classList.toggle('on', shakyOn);
     $('shakyChip').setAttribute('aria-pressed', String(shakyOn));
   }
+  function renderMemorizedChip() {
+    $('memorizedChip').classList.toggle('on', memorizedOn);
+    $('memorizedChip').setAttribute('aria-pressed', String(memorizedOn));
+  }
+  // Mutually exclusive: turning one on turns the other off, both directions.
   $('shakyChip').addEventListener('click', () => {
     shakyOn = !shakyOn;
+    if (shakyOn && memorizedOn) {
+      memorizedOn = false;
+      renderMemorizedChip();
+    }
     renderShakyChip();
+    renderCorrectCapture();
+  });
+  $('memorizedChip').addEventListener('click', () => {
+    memorizedOn = !memorizedOn;
+    if (memorizedOn && shakyOn) {
+      shakyOn = false;
+      renderShakyChip();
+    }
+    renderMemorizedChip();
     renderCorrectCapture();
   });
 

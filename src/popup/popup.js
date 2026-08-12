@@ -14,6 +14,13 @@
   }
 
   let misses = [];
+  let outcomes = [];
+  // fps whose outcome record is confidence:'memorized' — a pure
+  // answer-recognition right that must not fake progress. Recomputed once
+  // per load() and reused by every render function that needs the honesty
+  // rules (focusTopics decay skip, stubborn graduation block) instead of
+  // each one re-deriving it from `outcomes`.
+  let memorizedFps = new Set();
   let topicFilter = null;
 
   // Undo-delete: the most recently deleted record, kept only in memory. If
@@ -52,7 +59,12 @@
   }
 
   async function load() {
-    misses = await Store.getMisses();
+    const db = await Store.getAll();
+    misses = db.misses;
+    outcomes = db.outcomes || [];
+    memorizedFps = new Set(
+      outcomes.filter((o) => o && o.fp && o.confidence === 'memorized').map((o) => o.fp)
+    );
 
     // First-run empty state: nothing to rank or search yet, so swap the
     // whole dashboard for a short "how to log your first miss" hero.
@@ -108,10 +120,14 @@
 
   /** Missed 3+ times with no right since the last miss — change how you
    *  study these, not how often. Graduates the moment a right postdates
-   *  the latest attempt. */
-  function isStubborn(m) {
+   *  the latest attempt — UNLESS the fp is flagged memorized, in which case
+   *  no right graduates it: a memorized "right" is answer-recognition, not
+   *  proof the question is fixed, so it stays stubborn until a real miss or
+   *  a manual edit resets it (see the confidence typedef note in store.js). */
+  function isStubborn(m, memorized = memorizedFps) {
     const attempts = attemptsOf(m);
     if (attempts.length < 3) return false;
+    if (memorized.has(m.fp)) return true;
     const latestAttempt = Math.max(...attempts);
     const rights = rightsOf(m);
     const latestRight = rights.length ? Math.max(...rights) : 0;
@@ -372,7 +388,9 @@
         <div class="debrief-row" data-id="${esc(m.id)}">
           <span class="debrief-q">${
             !m.triaged ? '<span class="dot-untriaged">•</span>' : ''
-          }${m.shaky ? '<span class="guessed-pill">guessed</span> ' : ''}${esc(truncate(m.question, 70))}</span>
+          }${m.shaky ? '<span class="guessed-pill">guessed</span> ' : ''}${
+            m.confidence === 'memorized' ? '<span class="memorized-pill">memorized</span> ' : ''
+          }${esc(truncate(m.question, 70))}</span>
           ${m.notes ? `<div class="debrief-note">“${esc(truncate(m.notes, 90))}”</div>` : ''}
           <div class="debrief-actions">
             <button class="link" data-act="triage" data-id="${esc(m.id)}">triage</button>
@@ -433,9 +451,11 @@
   /** The "what to actually do next" card: recency-ranked topics, memorized facts, stubborn questions. */
   function renderFocusCard() {
     const el = $('focusCard');
-    const focus = Store.focusTopics(misses, Date.now()).slice(0, 3);
+    const focus = Store.focusTopics(misses, Date.now(), outcomes).slice(0, 3);
     const facts = misses.filter((m) => m.fact).slice(0, 5);
-    const stubborn = misses.filter(isStubborn).slice(0, 3);
+    // Array.filter passes (element, index, array) — call isStubborn through
+    // an arrow so the numeric index can't clobber its `memorized` default.
+    const stubborn = misses.filter((m) => isStubborn(m)).slice(0, 3);
     const callout = discCallout();
 
     if (!focus.length && !facts.length && !stubborn.length && !callout) {
@@ -564,7 +584,9 @@
         <span>${esc(m.exam || 'untagged')} · ${esc(m.host || '')}</span>
         <span>${rights ? `<span class="rights-pill">✓${rights}</span> · ` : ''}${
       n > 1 ? `<span class="repeat-pill">missed ${n}×</span> · ` : ''
-    }${m.shaky ? `<span class="guessed-pill">guessed</span> · ` : ''}${fmtDate(m.ts)}</span>
+    }${m.shaky ? `<span class="guessed-pill">guessed</span> · ` : ''}${
+      m.confidence === 'memorized' ? `<span class="memorized-pill">memorized</span> · ` : ''
+    }${fmtDate(m.ts)}</span>
       </div>
       <div class="q clamp">${esc(m.question) || '<i>no question text</i>'}</div>
       <div class="ans">

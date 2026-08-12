@@ -318,6 +318,19 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
   border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
 }
 
+/* Memorized-right marker: same pill shape as guessed/rights, muted-toned —
+   flags a "right" that was pure answer-recognition (not reasoning), so it
+   doesn't fake progress. Deliberately a different tint from guessed-pill
+   (warn) so the two honesty flags read apart at a glance; --muted is themed
+   for both light and dark already via :root above. */
+.memorized-pill {
+  display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.5;
+  padding: 1px 7px; border-radius: 999px; color: var(--muted);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
 /* Discriminator tag: same shape as a topic chip, mono to read as "system
    metadata" rather than another topic. */
 .tagchip.disc-tag {
