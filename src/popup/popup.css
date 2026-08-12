@@ -72,7 +72,36 @@ body {
 }
 
 /* Full-tab view gets more room. */
-body.expanded { width: auto; max-width: 900px; max-height: none; margin: 0 auto; padding-bottom: 40px; }
+body.expanded { width: auto; max-width: 1140px; max-height: none; margin: 0 auto; padding-bottom: 40px; }
+
+/* --- full-tab dashboard grid ---
+   dash-grid/dash-left/dash-right default to display:contents, so they
+   generate no box and contribute nothing to the 400px popup's layout —
+   every child renders exactly where it would if this wrapper didn't exist.
+   Only body.expanded turns it into a real 2-column grid. */
+.dash-grid, .dash-left, .dash-right { display: contents; }
+
+body.expanded .dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px 20px;
+  align-items: start;
+}
+body.expanded .dash-left,
+body.expanded .dash-right {
+  display: block;
+  min-width: 0;
+}
+/* Debrief + focus span both columns at the top of the grid, same visual
+   treatment as before — just zero out their own vertical margin so the
+   grid's row gap is the only source of spacing between them. */
+body.expanded .debrief-card,
+body.expanded .focus-card {
+  grid-column: 1 / -1;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+body.expanded .dash-right { padding-right: 14px; }
 
 .top {
   display: flex; align-items: flex-start; justify-content: space-between;
@@ -436,4 +465,83 @@ main { padding: 12px 14px 18px; }
 .empty {
   border: 1px dashed var(--line); border-radius: var(--radius); padding: 20px 16px;
   text-align: center; color: var(--muted); font-size: 12px; background: var(--raised);
+}
+
+/* --- insight cards (full-tab dashboard only) --- */
+.insights { display: flex; flex-direction: column; gap: 14px; }
+.insights[hidden] { display: none; }
+
+.insight-card {
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 13px;
+}
+/* Same mono uppercase left-tick header used everywhere else, just with a
+   tighter bottom margin and no top margin — .minihead's 18px top margin is
+   tuned for separating stacked sections in a pane, not a card's own header. */
+.insight-card .minihead { margin: 0 0 10px; }
+.insight-takeaway {
+  font-size: 11.5px; color: var(--muted); margin: 10px 0 0; padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* Confidence calibration: one horizontal bar per confidence level. */
+.calib-chart { display: flex; flex-direction: column; gap: 9px; }
+.calib-row { display: grid; grid-template-columns: 68px 1fr 34px 46px; align-items: center; gap: 8px; }
+.calib-label { font-size: 11.5px; font-weight: 600; }
+.calib-bar {
+  position: relative; height: 10px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--line); overflow: hidden;
+}
+.calib-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.calib-pct {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11px;
+  text-align: right; color: var(--fg);
+}
+.calib-n {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 10.5px;
+  color: var(--muted); text-align: right;
+}
+
+/* Accuracy by topic: stacked correct/incorrect bar per topic. */
+.topic-chart { display: flex; flex-direction: column; gap: 9px; }
+.topic-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 34px; align-items: center; gap: 8px; }
+.topic-name {
+  font-size: 11.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topic-bar {
+  position: relative; height: 10px; border-radius: 4px;
+  background: var(--bg); border: 1px solid var(--line); overflow: hidden; display: flex;
+}
+.topic-correct { height: 100%; background: var(--accent); }
+.topic-incorrect { height: 100%; background: var(--danger); }
+.topic-n {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 10.5px;
+  color: var(--muted); text-align: right;
+}
+/* Warn-tinted "hollow" flag: correct answers on this topic are mostly
+   recognition (memorized), not reasoning. */
+.hollow-tag {
+  display: inline-block; font-family: var(--mono); font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; line-height: 1.5;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 999px; padding: 0 6px; flex-shrink: 0;
+}
+
+/* Sessions timeline: one column per session, bar height = miss count
+   relative to the max shown, number always printed above the bar. */
+.sessions-chart { display: flex; align-items: flex-end; gap: 8px; }
+.session-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.session-track {
+  width: 100%; max-width: 30px; height: 96px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+}
+.session-n {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11px;
+  color: var(--fg); margin-bottom: 4px;
+}
+.session-bar { width: 100%; background: var(--danger); opacity: .75; border-radius: 3px 3px 0 0; }
+.session-date {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 9.5px; color: var(--muted);
 }

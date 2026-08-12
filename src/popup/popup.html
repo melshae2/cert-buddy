@@ -38,52 +38,69 @@
 
     <p class="nudge" id="nudge" hidden></p>
 
-    <section class="debrief-card" id="debriefCard" hidden></section>
+    <!-- Full-tab dashboard grid (body.expanded only). dash-grid/dash-left/
+         dash-right are `display:contents` by default (see popup.css), so in
+         the 400px popup this wrapper generates no box at all and every
+         child renders exactly where it would have without it — pixel
+         identical to before this markup existed. Only under body.expanded
+         does it become a real 2-column CSS grid. -->
+    <div class="dash-grid">
+      <section class="debrief-card" id="debriefCard" hidden></section>
 
-    <section class="focus-card" id="focusCard" hidden></section>
+      <section class="focus-card" id="focusCard" hidden></section>
 
-    <nav class="tabs" id="tabsNav">
-      <button class="tab active" data-tab="weak">Weak areas</button>
-      <button class="tab" data-tab="recent">Recent</button>
-      <button class="tab" data-tab="data">Data</button>
-    </nav>
+      <div class="dash-left">
+        <nav class="tabs" id="tabsNav">
+          <button class="tab active" data-tab="weak">Weak areas</button>
+          <button class="tab" data-tab="recent">Recent</button>
+          <button class="tab" data-tab="data">Data</button>
+        </nav>
 
-    <main id="mainPanes">
-      <section id="tab-weak" class="pane">
-        <div id="weakList" class="list"></div>
-        <details id="reasonDetails">
-          <summary class="minihead"><span class="label">Why you miss them<span class="count" id="reasonCount"></span></span></summary>
-          <div id="reasonList" class="list"></div>
-        </details>
-        <details id="discDetails">
-          <summary class="minihead"><span class="label">What questions turn on<span class="count" id="discCount"></span></span></summary>
-          <div id="discList" class="list"></div>
-        </details>
-      </section>
+        <main id="mainPanes">
+          <section id="tab-weak" class="pane">
+            <div id="weakList" class="list"></div>
+            <details id="reasonDetails">
+              <summary class="minihead"><span class="label">Why you miss them<span class="count" id="reasonCount"></span></span></summary>
+              <div id="reasonList" class="list"></div>
+            </details>
+            <details id="discDetails">
+              <summary class="minihead"><span class="label">What questions turn on<span class="count" id="discCount"></span></span></summary>
+              <div id="discList" class="list"></div>
+            </details>
+          </section>
 
-      <section id="tab-recent" class="pane" hidden>
-        <div class="filterbar" id="filterbar" hidden>
-          Filtered to <b id="filterLabel"></b>
-          <button class="link" id="clearFilter">clear</button>
-        </div>
-        <input type="text" id="search" placeholder="Search questions, answers, notes…" />
-        <div id="recentList" class="list"></div>
-      </section>
+          <section id="tab-recent" class="pane" hidden>
+            <div class="filterbar" id="filterbar" hidden>
+              Filtered to <b id="filterLabel"></b>
+              <button class="link" id="clearFilter">clear</button>
+            </div>
+            <input type="text" id="search" placeholder="Search questions, answers, notes…" />
+            <div id="recentList" class="list"></div>
+          </section>
 
-      <section id="tab-data" class="pane" hidden>
-        <p class="note">
-          Everything lives in this browser's local storage. Nothing is uploaded.
-          Export regularly if you care about the data.
-        </p>
-        <button class="btn" id="export">Export JSON</button>
-        <label class="btn file">
-          Import JSON
-          <input type="file" id="importFile" accept="application/json" hidden />
-        </label>
-        <button class="btn danger" id="clear">Delete everything</button>
-        <p class="note" id="dataMsg"></p>
-      </section>
-    </main>
+          <section id="tab-data" class="pane" hidden>
+            <p class="note">
+              Everything lives in this browser's local storage. Nothing is uploaded.
+              Export regularly if you care about the data.
+            </p>
+            <button class="btn" id="export">Export JSON</button>
+            <label class="btn file">
+              Import JSON
+              <input type="file" id="importFile" accept="application/json" hidden />
+            </label>
+            <button class="btn danger" id="clear">Delete everything</button>
+            <p class="note" id="dataMsg"></p>
+          </section>
+        </main>
+      </div>
+
+      <div class="dash-right">
+        <!-- Insight cards: built by popup.js ONLY when ?view=full (isFull).
+             In the popup this stays empty and hidden, so none of the 3
+             insight-card elements exist in that DOM at all. -->
+        <section class="insights" id="insights" hidden></section>
+      </div>
+    </div>
 
     <datalist id="cb-topics"></datalist>
 

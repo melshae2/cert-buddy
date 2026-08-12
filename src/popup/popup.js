@@ -85,6 +85,7 @@
     renderReasons();
     renderDiscList();
     renderRecent();
+    renderInsights();
 
     // Corruption insurance doesn't affect what's on screen, so it can run
     // after the render without the UI waiting on it.
@@ -308,6 +309,197 @@
       </div>`
       )
       .join('');
+  }
+
+  // ---- Insights (full-tab dashboard only) ------------------------------
+  // Three cards computed from `misses` + `outcomes`. Every one of them
+  // renders nothing (not even its own DOM nodes) unless isFull — the
+  // container element that hosts them (#insights) stays empty and hidden
+  // in the 400px popup, so those elements simply don't exist there.
+
+  const MIN_INSIGHT_N = 5;
+  const CONFIDENCE_ORDER = ['knew', 'unsure', 'guessed', 'memorized'];
+  const CONFIDENCE_LABELS = {
+    knew: 'Knew it',
+    unsure: 'Unsure',
+    guessed: 'Guessed',
+    memorized: 'Memorized'
+  };
+  // Anchor accuracy each confidence level SHOULD land near — used only to
+  // pick which level's actual accuracy is furthest off for the one-line
+  // takeaway, never drawn on the chart itself. knew/memorized are near-
+  // certain claims, so ~95%+ is the bar the spec itself names; unsure is
+  // partial knowledge; guessed is close to chance on 4-option MC.
+  const CONFIDENCE_EXPECTED = { knew: 95, memorized: 95, unsure: 60, guessed: 30 };
+
+  const insightEmptyHtml = () => `<div class="empty">not enough data yet — keep logging</div>`;
+  const insightCardShell = (title, bodyHtml) =>
+    `<section class="insight-card"><div class="minihead"><span class="label">${esc(title)}</span></div>${bodyHtml}</section>`;
+
+  /**
+   * Card 1 — for each confidence level with outcomes on file, % of those
+   * outcomes that were actually correct, plus n. The point: "knew it"
+   * should be ~95%+ correct; a lower number means self-assessment (not
+   * knowledge) is the thing that's broken.
+   */
+  function renderCalibrationCard() {
+    const withConfidence = outcomes.filter((o) => o && CONFIDENCE_ORDER.includes(o.confidence));
+    if (withConfidence.length < MIN_INSIGHT_N) {
+      return insightCardShell('Confidence calibration', insightEmptyHtml());
+    }
+
+    const rows = CONFIDENCE_ORDER.map((level) => {
+      const items = withConfidence.filter((o) => o.confidence === level);
+      if (!items.length) return null;
+      const correct = items.filter((o) => o.outcome === 'correct').length;
+      return { level, n: items.length, correct, pct: Math.round((correct / items.length) * 100) };
+    }).filter(Boolean);
+
+    let worst = rows[0];
+    for (const r of rows) {
+      const gap = Math.abs(r.pct - CONFIDENCE_EXPECTED[r.level]);
+      const worstGap = Math.abs(worst.pct - CONFIDENCE_EXPECTED[worst.level]);
+      if (gap > worstGap) worst = r;
+    }
+    const takeaway = `Biggest gap: "${CONFIDENCE_LABELS[worst.level]}" — expected ~${CONFIDENCE_EXPECTED[worst.level]}%+ correct, actual ${worst.pct}% (n=${worst.n}).`;
+
+    const bars = rows
+      .map(
+        (r) => `
+      <div class="calib-row">
+        <span class="calib-label">${esc(CONFIDENCE_LABELS[r.level])}</span>
+        <div class="calib-bar"><div class="calib-fill" style="width:${r.pct}%"></div></div>
+        <span class="calib-pct">${r.pct}%</span>
+        <span class="calib-n">n=${r.n}</span>
+      </div>`
+      )
+      .join('');
+
+    return insightCardShell(
+      'Confidence calibration',
+      `<div class="calib-chart">${bars}</div><p class="insight-takeaway">${esc(takeaway)}</p>`
+    );
+  }
+
+  /**
+   * Card 2 — per-topic correct/incorrect split across outcomes. Topic comes
+   * from the MISS record sharing the outcome's fp (the same question,
+   * logged and tagged at some point) when one exists; otherwise falls back
+   * to weighted keyword detection on the outcome's own question snippet.
+   * Top 12 topics by outcome count. A topic whose correct outcomes are
+   * mostly 'memorized' confidence gets an extra "hollow" tag — those are
+   * answer-recognition rights, not evidence the material's actually known.
+   */
+  function renderTopicAccuracyCard() {
+    if (outcomes.length < MIN_INSIGHT_N) {
+      return insightCardShell('Accuracy by topic', insightEmptyHtml());
+    }
+
+    const missByFp = new Map();
+    for (const m of misses) if (m.fp) missByFp.set(m.fp, m);
+
+    const tally = new Map(); // topic -> { correct, incorrect, memorizedCorrect }
+    for (const o of outcomes) {
+      if (!o) continue;
+      const linked = o.fp ? missByFp.get(o.fp) : null;
+      const topics =
+        linked && linked.topics && linked.topics.length
+          ? linked.topics
+          : Tax.detectWeighted({ question: o.questionSnippet }).apply;
+      if (!topics || !topics.length) continue;
+      const isCorrect = o.outcome === 'correct';
+      for (const t of topics) {
+        const prev = tally.get(t) || { correct: 0, incorrect: 0, memorizedCorrect: 0 };
+        if (isCorrect) {
+          prev.correct++;
+          if (o.confidence === 'memorized') prev.memorizedCorrect++;
+        } else {
+          prev.incorrect++;
+        }
+        tally.set(t, prev);
+      }
+    }
+
+    const ranked = [...tally.entries()]
+      .map(([topic, v]) => ({ topic, ...v, total: v.correct + v.incorrect }))
+      .sort((a, b) => b.total - a.total || a.topic.localeCompare(b.topic))
+      .slice(0, 12);
+
+    if (!ranked.length) {
+      return insightCardShell('Accuracy by topic', insightEmptyHtml());
+    }
+
+    const max = Math.max(...ranked.map((r) => r.total));
+    const rows = ranked
+      .map((r) => {
+        const catId = Tax.get(r.topic)?.category || 'concept';
+        const hollow = r.correct > 0 && r.memorizedCorrect / r.correct >= 0.4;
+        const correctPct = (r.correct / max) * 100;
+        const incorrectPct = (r.incorrect / max) * 100;
+        return `
+      <div class="topic-row">
+        <span class="topic-name">
+          <span class="dot" style="background:var(--cat-${catId})"></span>${esc(Tax.label(r.topic))}${
+          hollow ? ' <span class="hollow-tag">hollow</span>' : ''
+        }
+        </span>
+        <div class="topic-bar">
+          <div class="topic-correct" style="width:${correctPct}%"></div>
+          <div class="topic-incorrect" style="width:${incorrectPct}%"></div>
+        </div>
+        <span class="topic-n">n=${r.total}</span>
+      </div>`;
+      })
+      .join('');
+
+    return insightCardShell('Accuracy by topic', `<div class="topic-chart">${rows}</div>`);
+  }
+
+  const fmtMonthDay = (ts) => {
+    const d = new Date(ts);
+    return String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+  };
+
+  /**
+   * Card 3 — last 10 study sessions (Store.sessionize), oldest to newest, one
+   * column per session sized by miss count. Shaky "rights" are already
+   * counted as misses inside `misses`/sessionize, nothing extra to do here.
+   */
+  function renderSessionsCard() {
+    const sessions = Store.sessionize(misses);
+    if (sessions.length < MIN_INSIGHT_N) {
+      return insightCardShell('Sessions timeline', insightEmptyHtml());
+    }
+
+    const shown = sessions.slice(0, 10).slice().reverse(); // most recent 10, oldest -> newest
+    const max = Math.max(...shown.map((s) => s.misses.length), 1);
+    const cols = shown
+      .map((s) => {
+        const n = s.misses.length;
+        const h = Math.max(Math.round((n / max) * 100), 6);
+        return `
+      <div class="session-col">
+        <div class="session-track">
+          <span class="session-n">${n}</span>
+          <div class="session-bar" style="height:${h}%"></div>
+        </div>
+        <span class="session-date">${esc(fmtMonthDay(s.end))}</span>
+      </div>`;
+      })
+      .join('');
+
+    return insightCardShell('Sessions timeline', `<div class="sessions-chart">${cols}</div>`);
+  }
+
+  function renderInsights() {
+    const el = $('insights');
+    if (!isFull) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = renderCalibrationCard() + renderTopicAccuracyCard() + renderSessionsCard();
+    el.hidden = false;
   }
 
   /**
