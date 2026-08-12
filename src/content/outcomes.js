@@ -229,7 +229,11 @@
       </div>`;
     shadow.appendChild(wrap);
 
-    document.documentElement.appendChild(host);
+    // The toast is built lazily — if its first appearance happens while the
+    // player is ALREADY element-fullscreened, mounting outside that subtree
+    // makes it invisible and no later fullscreenchange will rescue it. Born
+    // inside the fullscreen element when there is one.
+    (document.fullscreenElement || document.documentElement).appendChild(host);
 
     // Same fullscreen ride-along as the tagger: element-fullscreen would hide
     // the toast, and this toast IS the confidence feature during an exam.

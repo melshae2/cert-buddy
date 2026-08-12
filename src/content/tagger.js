@@ -827,7 +827,9 @@
   dropBadgeIfPlayerIframe();
   setTimeout(dropBadgeIfPlayerIframe, 1500); // players often mount late
 
-  document.documentElement.appendChild(host);
+  // Mount into the fullscreen element if the page is already fullscreened at
+  // inject time (on-demand injection mid-exam) — outside it we'd be invisible.
+  (document.fullscreenElement || document.documentElement).appendChild(host);
 
   // Element-fullscreen (Udemy's expand control) renders ONLY the fullscreened
   // subtree — UI mounted outside it silently disappears. Ride along by
