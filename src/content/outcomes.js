@@ -171,46 +171,73 @@
     }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 
+    /* Luminance inversion: the toast lands in peripheral vision, which is
+       nearly colorblind but sharply luminance- and motion-sensitive. So the
+       toast is always the OPPOSITE brightness of the page — an ink pill on
+       light pages, a paper pill on dark ones — and announces itself with
+       delayed motion, not hue. */
+    :host {
+      --toast-bg: #171d1a;
+      --toast-fg: #eef2ef;
+      --toast-muted: #9fb0a7;
+      --toast-accent: #3ddc97;
+      --toast-accent-ink: #062018;
+    }
+    @media (prefers-color-scheme: dark) {
+      :host {
+        --toast-bg: #fafbf9;
+        --toast-fg: #14171a;
+        --toast-muted: #5c6a63;
+        --toast-accent: #149463;
+        --toast-accent-ink: #ffffff;
+      }
+    }
     .toast {
-      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      /* Bottom-right, stacked above the tagger's ⚑ badge — on the mouse path
+         to Udemy's "Next question" (Fitts: less travel than bottom-center). */
+      position: fixed; right: 16px; bottom: 76px;
       z-index: 2147483645; /* one below the tagger's panel/launcher */
       display: flex; align-items: center; gap: 14px;
-      background: var(--raised); color: var(--fg);
-      border: 1px solid var(--line); border-left: 4px solid var(--accent);
+      background: var(--toast-bg); color: var(--toast-fg);
+      border: 1px solid color-mix(in srgb, var(--toast-fg) 14%, transparent);
+      border-left: 4px solid var(--toast-accent);
       border-radius: var(--radius);
-      box-shadow: 0 12px 32px rgba(0,0,0,.28);
+      box-shadow: 0 14px 36px rgba(0,0,0,.35);
       padding: 12px 14px 12px 16px; font-size: 14px;
-      animation: cb-toast-in .18s ease-out;
+      animation: cb-toast-in .26s cubic-bezier(.2,.9,.3,1.15);
     }
+    /* One small overshoot — a lone motion onset in a settled scene. */
     @keyframes cb-toast-in {
-      from { transform: translateX(-50%) translateY(14px); opacity: 0; }
-      to   { transform: translateX(-50%) translateY(0);    opacity: 1; }
+      0%   { transform: translateY(22px); opacity: 0; }
+      70%  { transform: translateY(-4px); opacity: 1; }
+      100% { transform: translateY(0);    opacity: 1; }
     }
     @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
     .toast[hidden] { display: none; }
 
     .label {
-      font-family: var(--mono); font-size: 12.5px; color: var(--fg);
+      font-family: var(--mono); font-size: 12.5px; color: var(--toast-fg);
       white-space: nowrap; letter-spacing: .01em; font-weight: 600;
     }
     .btns { display: flex; gap: 8px; }
     .btn {
       font-family: var(--mono); font-size: 13px; font-weight: 600;
-      padding: 9px 14px; border-radius: 7px; border: 1px solid var(--line);
-      background: var(--bg); color: var(--fg); cursor: pointer;
+      padding: 9px 14px; border-radius: 7px;
+      border: 1px solid color-mix(in srgb, var(--toast-accent) 55%, transparent);
+      background: transparent; color: var(--toast-fg); cursor: pointer;
       transition: background .12s, border-color .12s, color .12s;
       white-space: nowrap;
     }
-    .btn:hover { border-color: var(--accent); }
-    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .btn .k { opacity: .55; margin-left: 5px; }
-    .btn.flash { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+    .btn:hover { background: var(--toast-accent); border-color: var(--toast-accent); color: var(--toast-accent-ink); }
+    .btn:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
+    .btn .k { opacity: .6; margin-left: 5px; }
+    .btn.flash { background: var(--toast-accent); border-color: var(--toast-accent); color: var(--toast-accent-ink); }
     .btn.flash .k { opacity: .85; }
     .x {
-      border: 0; background: transparent; color: var(--muted); cursor: pointer;
+      border: 0; background: transparent; color: var(--toast-muted); cursor: pointer;
       font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px;
     }
-    .x:hover { background: var(--bg); color: var(--fg); }
+    .x:hover { color: var(--toast-fg); background: color-mix(in srgb, var(--toast-fg) 10%, transparent); }
   `;
 
   const CONFIDENCE_KEYS = { '1': 'knew', '2': 'unsure', '3': 'guessed' };
@@ -276,12 +303,20 @@
   function showToast(fp) {
     ensureToast();
     toastFp = fp;
-    toastEl.hidden = false;
+    // Change-blindness fix: the banner's own render masks a simultaneous
+    // onset, so the toast enters ~400ms later, once the scene has settled —
+    // a lone motion in a still scene is what peripheral vision is built to
+    // catch. Hidden-then-shown also replays the entrance animation when one
+    // toast replaces another.
+    toastEl.hidden = true;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.hidden = false;
+    }, 400);
     // No auto-dismiss (user decision): the tap is high-value and costs
     // nothing, so the toast stays until a button, 1/2/3, or × dismisses it.
     // It stays bound to the fp that spawned it; the next question's outcome
     // simply replaces it via this same function.
-    clearTimeout(toastTimer);
   }
 
   function hideToast() {
