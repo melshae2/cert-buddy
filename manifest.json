@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cert Buddy",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Tag the practice questions you miss, right where you study. Local-only weak-area tracking for cert prep.",
   "permissions": ["storage", "scripting", "activeTab"],
   "action": {

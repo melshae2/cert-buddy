@@ -152,6 +152,12 @@
     .reason-btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
     .reason-row.flash { outline: 2px solid var(--danger); outline-offset: 3px; border-radius: var(--radius); }
 
+    /* Correct captures (shaky chip on, or a passive outcome already says
+       this fp went correct) have nothing to classify — the reason UI hides
+       in both layouts and a hint takes the compact row's place. */
+    .panel.correct-capture .reason-only { display: none; }
+    .correct-hint { font-family: var(--mono); }
+
     /* Panel starts collapsed to the essentials; Expand reveals the rest. */
     .panel.compact .full-only { display: none; }
     .kbd { font-family: var(--mono); font-weight: 400; opacity: .8; font-size: 11px; margin-left: 3px; }
@@ -247,8 +253,9 @@
         <select id="discSelect" class="disc-select" hidden></select>
       </div>
 
-      <label class="f" id="reasonRowLabel">Why you missed it (⌥1–3)</label>
-      <div class="reason-row" id="reasonRow" role="group" aria-labelledby="reasonRowLabel"></div>
+      <label class="f reason-only" id="reasonRowLabel">Why you missed it (⌥1–3)</label>
+      <div class="reason-row reason-only" id="reasonRow" role="group" aria-labelledby="reasonRowLabel"></div>
+      <p class="hint correct-hint" id="correctHint" hidden>answered correctly — no reason needed</p>
 
       <label class="f" for="notes" id="notesLabel">Why did you get this wrong?</label>
       <textarea id="notes" rows="2" placeholder="one honest sentence…"></textarea>
@@ -277,8 +284,8 @@
         </div>
         <div class="hint" id="autoHint"></div>
 
-        <label class="f" for="reason">Why you missed it (⌥1–3)</label>
-        <select id="reason"></select>
+        <label class="f reason-only" for="reason">Why you missed it (⌥1–3)</label>
+        <select id="reason" class="reason-only"></select>
 
         <label class="f" for="fact">Fact to memorize</label>
         <textarea class="autogrow" id="fact" rows="1" placeholder="The exact limit/number this hinged on…"></textarea>
@@ -314,6 +321,8 @@
   let autoTopics = [];
   let suggestedTopics = []; // score===1, non-concept — shown as ghost chips, not applied
   let shakyOn = false; // "guessed it (got it right)" toggle state
+  let outcomeSaysCorrect = false; // passive signal: the outcomes log already has this fp as correct
+  let isCorrectCapture = false; // shakyOn || outcomeSaysCorrect — gates the reason UI
   let lastExam = ''; // remembered across opens so you type the exam code once
   let badgeHidden = false; // this host is on the hidden list
   let suggIndex = -1;
@@ -458,6 +467,10 @@
     syncReasonButtons();
     shakyOn = false;
     renderShakyChip();
+    // Reset the passive signal before its lookup resolves, so a lingering
+    // "correct" state from the previous question can't bleed into this one.
+    outcomeSaysCorrect = false;
+    renderCorrectCapture();
     $('fact').value = '';
     for (const id of ['yourAnswer', 'correctAnswer', 'fact']) autogrow($(id));
 
@@ -468,6 +481,33 @@
     reasonButtons[0].focus();
 
     showRepeatBanner(data.question);
+    checkOutcomeCorrect(data.question);
+  }
+
+  /**
+   * Passive half of isCorrectCapture: does the outcomes log already have
+   * this question's fingerprint logged 'correct' (via the Check-answer
+   * banner + confidence toast, no tagger interaction required)? Async like
+   * showRepeatBanner — resolves after the panel is already open.
+   */
+  async function checkOutcomeCorrect(question) {
+    const fp = Store.fingerprint(question);
+    const outcome = fp ? await Store.getOutcomeByFp(fp) : null;
+    outcomeSaysCorrect = !!(outcome && outcome.outcome === 'correct');
+    renderCorrectCapture();
+  }
+
+  /**
+   * Recomputes isCorrectCapture from its two signals and syncs the UI: the
+   * reason row/select hide (via .correct-capture on the panel, see CSS),
+   * the hint line takes their place, and the "save without reason" escape
+   * hatch hides since there's nothing left to escape from requiring.
+   */
+  function renderCorrectCapture() {
+    isCorrectCapture = shakyOn || outcomeSaysCorrect;
+    panel.classList.toggle('correct-capture', isCorrectCapture);
+    $('correctHint').hidden = !isCorrectCapture;
+    $('saveWithoutReason').hidden = isCorrectCapture;
   }
 
   /**
@@ -532,15 +572,18 @@
       showToast('Nothing to save — add a question or a topic.', true);
       return;
     }
-    const reason = reasonSel.value;
-    if (requireReason && !reason) {
+    // A correct capture has nothing to classify — reason is forced empty
+    // and never required, regardless of what's left over in the select from
+    // before the panel recognized this as a correct capture.
+    const reason = isCorrectCapture ? '' : reasonSel.value;
+    if (requireReason && !isCorrectCapture && !reason) {
       flashReasonRow();
       return;
     }
     $('save').disabled = true;
     lastExam = $('exam').value.trim();
     try {
-      const { repeat, attempt } = await Store.addMiss({
+      const payload = {
         host: location.hostname,
         url: location.href.slice(0, 500),
         exam: lastExam,
@@ -553,10 +596,17 @@
         fact: $('fact').value.trim(),
         disc: currentDisc,
         shaky: shakyOn,
-        // Picking a reason is what "triaging" a capture means here. The
-        // escape hatch can still land here with no reason -> stays untriaged.
-        triaged: !!reason
-      });
+        // Picking a reason is what "triaging" a capture means here — except
+        // a correct capture, which is triaged by definition (nothing to
+        // classify). The escape hatch can still land here with no reason on
+        // an incorrect capture -> stays untriaged.
+        triaged: isCorrectCapture || !!reason
+      };
+      // The shaky chip IS a guessed declaration — say so explicitly. Any
+      // other capture leaves confidence absent so addMiss's own join can
+      // pull it from the matching outcome record instead.
+      if (shakyOn) payload.confidence = 'guessed';
+      const { repeat, attempt } = await Store.addMiss(payload);
       close();
       showToast(repeat ? `Attempt ${attempt} logged on a repeat ✓` : 'Miss logged ✓');
     } catch (e) {
@@ -627,6 +677,7 @@
   $('shakyChip').addEventListener('click', () => {
     shakyOn = !shakyOn;
     renderShakyChip();
+    renderCorrectCapture();
   });
 
   function renderSuggestChips() {
@@ -729,7 +780,8 @@
       const reason = m && Tax.REASONS[Number(m[1]) - 1];
       if (reason) {
         e.preventDefault();
-        pickReason(reason.id);
+        // Row's hidden on a correct capture — nothing to pick.
+        if (!isCorrectCapture) pickReason(reason.id);
         e.stopPropagation();
         return;
       }

@@ -202,6 +202,16 @@
     },
 
     /**
+     * The passive outcome record for a fingerprint, if one exists. Lets
+     * callers (the tagger) check "was this already answered correctly?"
+     * without reaching into raw db state themselves.
+     */
+    async getOutcomeByFp(fp) {
+      if (!fp) return null;
+      return (await read()).outcomes.find((o) => o.fp === fp) || null;
+    },
+
+    /**
      * Log a miss. If the same question is already on file, this records another
      * ATTEMPT on that record rather than creating a duplicate — repeat misses
      * are signal, but they shouldn't clutter the list or look like two
