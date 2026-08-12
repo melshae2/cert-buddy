@@ -27,22 +27,17 @@
     .launcher {
       position: fixed; right: 20px; bottom: 20px; z-index: 2147483646;
       display: flex; align-items: center; justify-content: center;
-      width: 92px; height: 92px; padding: 0; border-radius: 50%;
+      width: 69px; height: 69px; padding: 0; border-radius: 50%;
       background: #fff;
       border: 3px solid var(--accent);
-      box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent),
-                  0 6px 18px rgba(0,0,0,.16);
+      box-shadow: 0 5px 14px rgba(0,0,0,.16);
       cursor: pointer; opacity: .92;
       transition: opacity .15s, box-shadow .15s, transform .12s;
     }
     .launcher:active { transform: scale(.95); }
-    .launcher:hover {
-      opacity: 1;
-      box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 60%, transparent),
-                  0 8px 22px rgba(0,0,0,.2);
-    }
+    .launcher:hover { opacity: 1; box-shadow: 0 7px 18px rgba(0,0,0,.22); }
     .buddy {
-      width: 82px; height: 82px; border-radius: 50%; background: #fff;
+      width: 60px; height: 60px; border-radius: 50%; background: #fff;
       object-fit: cover; flex-shrink: 0;
     }
     .buddy-h { width: 18px; height: 18px; vertical-align: -4px; margin-right: 6px; }
