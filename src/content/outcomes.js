@@ -172,24 +172,31 @@
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 
     .toast {
-      position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
       z-index: 2147483645; /* one below the tagger's panel/launcher */
-      display: flex; align-items: center; gap: 10px;
+      display: flex; align-items: center; gap: 14px;
       background: var(--raised); color: var(--fg);
-      border: 1px solid var(--line); border-radius: var(--radius);
-      box-shadow: 0 8px 20px rgba(0,0,0,.18);
-      padding: 8px 10px 8px 12px; font-size: 12px;
+      border: 1px solid var(--line); border-left: 4px solid var(--accent);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 32px rgba(0,0,0,.28);
+      padding: 12px 14px 12px 16px; font-size: 14px;
+      animation: cb-toast-in .18s ease-out;
     }
+    @keyframes cb-toast-in {
+      from { transform: translateX(-50%) translateY(14px); opacity: 0; }
+      to   { transform: translateX(-50%) translateY(0);    opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
     .toast[hidden] { display: none; }
 
     .label {
-      font-family: var(--mono); font-size: 10.5px; color: var(--muted);
-      white-space: nowrap; letter-spacing: .01em;
+      font-family: var(--mono); font-size: 12.5px; color: var(--fg);
+      white-space: nowrap; letter-spacing: .01em; font-weight: 600;
     }
-    .btns { display: flex; gap: 6px; }
+    .btns { display: flex; gap: 8px; }
     .btn {
-      font-family: var(--mono); font-size: 11px; font-weight: 600;
-      padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line);
+      font-family: var(--mono); font-size: 13px; font-weight: 600;
+      padding: 9px 14px; border-radius: 7px; border: 1px solid var(--line);
       background: var(--bg); color: var(--fg); cursor: pointer;
       transition: background .12s, border-color .12s, color .12s;
       white-space: nowrap;
@@ -199,6 +206,11 @@
     .btn .k { opacity: .55; margin-left: 5px; }
     .btn.flash { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
     .btn.flash .k { opacity: .85; }
+    .x {
+      border: 0; background: transparent; color: var(--muted); cursor: pointer;
+      font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+    }
+    .x:hover { background: var(--bg); color: var(--fg); }
   `;
 
   const CONFIDENCE_KEYS = { '1': 'knew', '2': 'unsure', '3': 'guessed' };
@@ -226,8 +238,10 @@
           <button type="button" class="btn" data-val="unsure">unsure<span class="k">2</span></button>
           <button type="button" class="btn" data-val="guessed">guessed<span class="k">3</span></button>
         </div>
+        <button type="button" class="x" id="toastX" title="Dismiss (no confidence recorded)">×</button>
       </div>`;
     shadow.appendChild(wrap);
+    shadow.getElementById('toastX').addEventListener('click', hideToast);
 
     // The toast is built lazily — if its first appearance happens while the
     // player is ALREADY element-fullscreened, mounting outside that subtree
@@ -263,8 +277,11 @@
     ensureToast();
     toastFp = fp;
     toastEl.hidden = false;
+    // No auto-dismiss (user decision): the tap is high-value and costs
+    // nothing, so the toast stays until a button, 1/2/3, or × dismisses it.
+    // It stays bound to the fp that spawned it; the next question's outcome
+    // simply replaces it via this same function.
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideToast, 8000);
   }
 
   function hideToast() {
