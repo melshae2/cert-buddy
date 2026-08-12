@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cert Buddy</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <h1 class="wordmark">cert_buddy<span class="cursor" aria-hidden="true">▮</span></h1>
+        <p class="sub" id="subline">Loading…</p>
+      </div>
+      <button class="ghost" id="expand" title="Open in a full tab">⤢</button>
+    </header>
+
+    <div class="tabbar" id="notUdemyBar" hidden>
+      <span>Not on Udemy —</span>
+      <button class="link" id="enableHere">Enable logging on this page</button>
+      <span class="tabbar-msg" id="notUdemyMsg"></span>
+    </div>
+
+    <section class="hero" id="hero" hidden>
+      <h2 class="hero-title">log your first miss</h2>
+      <ol class="hero-steps">
+        <li>Open a practice question you got wrong (works on Udemy automatically)</li>
+        <li>Press ⌥M (Alt+M) or click the ⚑ badge</li>
+        <li>Fix the prefill, pick why you missed it, save.</li>
+      </ol>
+      <p class="hero-foot">Data stays in this browser. Export from the Data tab once you have some.</p>
+    </section>
+
+    <section class="stats" id="stats">
+      <div class="stat"><b id="statTotal">0</b><span>questions</span></div>
+      <div class="stat"><b id="stat7">0</b><span>last 7 days</span></div>
+      <div class="stat"><b id="statTopics">0</b><span>topics hit</span></div>
+    </section>
+
+    <p class="nudge" id="nudge" hidden></p>
+
+    <section class="debrief-card" id="debriefCard" hidden></section>
+
+    <section class="focus-card" id="focusCard" hidden></section>
+
+    <nav class="tabs" id="tabsNav">
+      <button class="tab active" data-tab="weak">Weak areas</button>
+      <button class="tab" data-tab="recent">Recent</button>
+      <button class="tab" data-tab="data">Data</button>
+    </nav>
+
+    <main id="mainPanes">
+      <section id="tab-weak" class="pane">
+        <div id="weakList" class="list"></div>
+        <details id="reasonDetails">
+          <summary class="minihead"><span class="label">Why you miss them<span class="count" id="reasonCount"></span></span></summary>
+          <div id="reasonList" class="list"></div>
+        </details>
+        <details id="discDetails">
+          <summary class="minihead"><span class="label">What questions turn on<span class="count" id="discCount"></span></span></summary>
+          <div id="discList" class="list"></div>
+        </details>
+      </section>
+
+      <section id="tab-recent" class="pane" hidden>
+        <div class="filterbar" id="filterbar" hidden>
+          Filtered to <b id="filterLabel"></b>
+          <button class="link" id="clearFilter">clear</button>
+        </div>
+        <input type="text" id="search" placeholder="Search questions, answers, notes…" />
+        <div id="recentList" class="list"></div>
+      </section>
+
+      <section id="tab-data" class="pane" hidden>
+        <p class="note">
+          Everything lives in this browser's local storage. Nothing is uploaded.
+          Export regularly if you care about the data.
+        </p>
+        <button class="btn" id="export">Export JSON</button>
+        <label class="btn file">
+          Import JSON
+          <input type="file" id="importFile" accept="application/json" hidden />
+        </label>
+        <button class="btn danger" id="clear">Delete everything</button>
+        <p class="note" id="dataMsg"></p>
+      </section>
+    </main>
+
+    <datalist id="cb-topics"></datalist>
+
+    <div class="toast" id="toast" hidden>
+      <span id="toastMsg"></span>
+      <button class="link" id="toastUndo">Undo</button>
+    </div>
+
+    <script src="../lib/store.js"></script>
+    <script src="../lib/taxonomy.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
