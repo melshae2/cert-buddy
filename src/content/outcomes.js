@@ -22,7 +22,8 @@
 
   const Store = globalThis.CertBuddyStore;
   const Adapters = globalThis.CertBuddyAdapters;
-  if (!Store || !Adapters) return; // load-order guard, mirrors tagger.js
+  const Theme = globalThis.CertBuddyTheme;
+  if (!Store || !Adapters || !Theme) return; // load-order guard, mirrors tagger.js
 
   function safe(fn, fallback) {
     try {
@@ -143,36 +144,9 @@
    * Feature 2 — one-tap confidence toast                                *
    * ------------------------------------------------------------------ */
 
-  const TOAST_CSS = `
-    :host {
-      all: initial;
-      --bg: #fafbf9;
-      --raised: #ffffff;
-      --line: #e2e7e3;
-      --fg: #14171a;
-      --muted: #6b7480;
-      --accent: #149463;
-      --accent-ink: #ffffff;
-      --warn: #b07a1e;
-      --warn-ink: #ffffff;
-      --mono: ui-monospace, "SF Mono", Menlo, monospace;
-      --radius: 8px;
-    }
-    @media (prefers-color-scheme: dark) {
-      :host {
-        --bg: #0e1210;
-        --raised: #161b18;
-        --line: #242b27;
-        --fg: #e6e9ee;
-        --muted: #98a1ad;
-        --accent: #3ddc97;
-        --accent-ink: #062018;
-        --warn: #e8c37a;
-        --warn-ink: #2b2210;
-      }
-    }
-    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-
+  // Shared :host token palette (light/dark) + box-sizing/font reset — see
+  // src/lib/theme.js. tagger.js's panel/launcher composes the same base.
+  const TOAST_CSS = Theme.css + `
     /* Luminance inversion: the toast lands in peripheral vision, which is
        nearly colorblind but sharply luminance- and motion-sensitive. So the
        toast is always the OPPOSITE brightness of the page — an ink pill on
@@ -275,19 +249,11 @@
 
     // The toast is built lazily — if its first appearance happens while the
     // player is ALREADY element-fullscreened, mounting outside that subtree
-    // makes it invisible and no later fullscreenchange will rescue it. Born
-    // inside the fullscreen element when there is one.
-    (document.fullscreenElement || document.documentElement).appendChild(host);
-
-    // Same fullscreen ride-along as the tagger: element-fullscreen would hide
-    // the toast, and this toast IS the confidence feature during an exam.
-    document.addEventListener('fullscreenchange', () => {
-      const fs = document.fullscreenElement;
-      if (fs && !fs.contains(host)) fs.appendChild(host);
-      else if (!fs && host.parentElement !== document.documentElement) {
-        document.documentElement.appendChild(host);
-      }
-    });
+    // makes it invisible and no later fullscreenchange will rescue it. Same
+    // fullscreen ride-along as the tagger's panel; shared in
+    // src/lib/theme.js since element-fullscreen would hide this toast too,
+    // and it IS the confidence feature during an exam.
+    Theme.mountFullscreenAware(host);
 
     for (const btn of shadow.querySelectorAll('.btn')) {
       btn.addEventListener('click', () => chooseConfidence(btn.dataset.val));

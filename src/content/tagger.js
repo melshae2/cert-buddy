@@ -19,51 +19,30 @@
   const Store = globalThis.CertBuddyStore;
   const Tax = globalThis.CertBuddyTaxonomy;
   const Adapters = globalThis.CertBuddyAdapters;
+  const Theme = globalThis.CertBuddyTheme;
 
-  const CSS = `
-    :host {
-      all: initial;
-      --bg: #fafbf9;
-      --raised: #ffffff;
-      --line: #e2e7e3;
-      --fg: #14171a;
-      --muted: #6b7480;
-      --accent: #149463;
-      --accent-ink: #ffffff;
-      --danger: #c73f52;
-      --warn: #b07a1e;
-      --warn-ink: #ffffff;
-      --mono: ui-monospace, "SF Mono", Menlo, monospace;
-      --radius: 8px;
-    }
-    @media (prefers-color-scheme: dark) {
-      :host {
-        --bg: #0e1210;
-        --raised: #161b18;
-        --line: #242b27;
-        --fg: #e6e9ee;
-        --muted: #98a1ad;
-        --accent: #3ddc97;
-        --accent-ink: #062018;
-        --danger: #ff7b8a;
-        --warn: #e8c37a;
-        --warn-ink: #2b2210;
-      }
-    }
-    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-
+  // Shared :host token palette (light/dark) + box-sizing/font reset — see
+  // src/lib/theme.js. outcomes.js's toast composes the same base.
+  const CSS = Theme.css + `
     .launcher {
-      position: fixed; right: 16px; bottom: 16px; z-index: 2147483646;
+      position: fixed; right: 20px; bottom: 20px; z-index: 2147483646;
       display: flex; align-items: center; justify-content: center;
-      width: 46px; height: 46px; padding: 0; border: 0; border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 6px 16px rgba(0,0,0,.18); cursor: pointer; opacity: .85;
+      width: 92px; height: 92px; padding: 0; border-radius: 50%;
+      background: #fff;
+      border: 3px solid var(--accent);
+      box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent),
+                  0 6px 18px rgba(0,0,0,.16);
+      cursor: pointer; opacity: .92;
       transition: opacity .15s, box-shadow .15s, transform .12s;
     }
-    .launcher:active { transform: scale(.94); }
-    .launcher:hover { opacity: 1; box-shadow: 0 8px 20px rgba(0,0,0,.24); }
+    .launcher:active { transform: scale(.95); }
+    .launcher:hover {
+      opacity: 1;
+      box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 60%, transparent),
+                  0 8px 22px rgba(0,0,0,.2);
+    }
     .buddy {
-      width: 38px; height: 38px; border-radius: 50%; background: #fff;
+      width: 82px; height: 82px; border-radius: 50%; background: #fff;
       object-fit: cover; flex-shrink: 0;
     }
     .buddy-h { width: 18px; height: 18px; vertical-align: -4px; margin-right: 6px; }
@@ -866,17 +845,8 @@
   setTimeout(dropBadgeIfPlayerIframe, 1500); // players often mount late
 
   // Mount into the fullscreen element if the page is already fullscreened at
-  // inject time (on-demand injection mid-exam) — outside it we'd be invisible.
-  (document.fullscreenElement || document.documentElement).appendChild(host);
-
-  // Element-fullscreen (Udemy's expand control) renders ONLY the fullscreened
-  // subtree — UI mounted outside it silently disappears. Ride along by
-  // re-parenting into the fullscreen element, and move back out on exit.
-  document.addEventListener('fullscreenchange', () => {
-    const fs = document.fullscreenElement;
-    if (fs && !fs.contains(host)) fs.appendChild(host);
-    else if (!fs && host.parentElement !== document.documentElement) {
-      document.documentElement.appendChild(host);
-    }
-  });
+  // inject time (on-demand injection mid-exam) — outside it we'd be
+  // invisible — and ride along on later fullscreen enter/exit. Shared with
+  // outcomes.js's toast host; see src/lib/theme.js.
+  Theme.mountFullscreenAware(host);
 })();

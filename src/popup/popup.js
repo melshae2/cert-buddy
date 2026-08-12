@@ -45,6 +45,25 @@
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
     );
 
+  /**
+   * URL scheme allowlist for anything rendered as an href. `m.url` is
+   * page-supplied (captured from `location.href` at tag time, or imported
+   * from someone else's export JSON) — HTML-escaping it is not enough on its
+   * own, since `javascript:`/`data:` survive escaping unchanged and still
+   * execute on click. Only http:/https: parse through; everything else,
+   * including anything `new URL` can't parse at all, returns '' so the
+   * caller omits the anchor entirely instead of rendering a dead/dangerous
+   * href="".
+   */
+  const safeUrl = (u) => {
+    try {
+      const parsed = new URL(String(u || ''));
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? u : '';
+    } catch (e) {
+      return '';
+    }
+  };
+
   const truncate = (s, n) => {
     s = String(s || '');
     return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
@@ -704,15 +723,16 @@
           <summary class="minihead"><span class="label">Stubborn questions <span class="count">· ${stubborn.length}</span></span></summary>
           <p class="focus-sub">Missed 3+ times — change how you study these, not how often.</p>
           ${stubborn
-            .map(
-              (m) => `
+            .map((m) => {
+              const url = safeUrl(m.url);
+              return `
                 <div class="focus-stubborn">
                   <span class="q">${esc(truncate(m.question, 70))}</span>
                   <span class="repeat-pill">missed ${attemptsOf(m).length}×</span>
                   <button class="link" data-act="right" data-id="${esc(m.id)}">✓ got it right</button>
-                  ${m.url ? `<a class="link" href="${esc(m.url)}" target="_blank" rel="noreferrer">retake ↗</a>` : ''}
-                </div>`
-            )
+                  ${url ? `<a class="link" href="${esc(url)}" target="_blank" rel="noreferrer">retake ↗</a>` : ''}
+                </div>`;
+            })
             .join('')}
         </details>`);
     }
@@ -771,6 +791,7 @@
     card.dataset.id = m.id;
     const n = attemptsOf(m).length;
     const rights = rightsOf(m).length;
+    const url = safeUrl(m.url);
     card.innerHTML = `
       <div class="meta">
         <span>${esc(m.exam || 'untagged')} · ${esc(m.host || '')}</span>
@@ -797,7 +818,7 @@
         <button class="link" data-act="expand">Show full</button>
         <button class="link" data-act="edit">Edit</button>
         <button class="link" data-act="right">✓ got it right</button>
-        ${m.url ? `<a class="link" href="${esc(m.url)}" target="_blank" rel="noreferrer">Open source</a>` : ''}
+        ${url ? `<a class="link" href="${esc(url)}" target="_blank" rel="noreferrer">Open source</a>` : ''}
         <button class="link danger" data-act="delete">Delete</button>
       </div>`;
 
@@ -1031,6 +1052,7 @@
         files: [
           'src/lib/store.js',
           'src/lib/taxonomy.js',
+          'src/lib/theme.js',
           'src/content/adapters.js',
           'src/content/outcomes.js',
           'src/content/tagger.js'

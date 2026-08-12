@@ -15,8 +15,6 @@
     // per question fingerprint, independent of the miss log. See
     // Store.logOutcome / Store.setConfidence.
     outcomes: [],
-    // Reserved for the notes-lookup feature. Nothing writes here yet.
-    notes: [],
     // Periodic in-storage copies of `misses` (and, from v2, `outcomes`),
     // written by snapshotIfDue(). These guard against a corrupted write
     // clobbering the live data — they do NOT survive a profile wipe or
@@ -125,15 +123,52 @@
       backups: db.backups || [],
       settings: Object.assign(emptyDb().settings, db.settings || {})
     });
+    // Retired seam: `notes` used to be a reserved-but-unused top-level array
+    // (nothing ever wrote to it). Object.assign above copies it straight
+    // through from `db` if an old blob still carries the key — drop it here
+    // so it never survives a write. Tolerating the key on READ, dropping it
+    // on WRITE, is the whole migration; there's no data to preserve.
+    delete merged.notes;
     // v1 -> v2 added `outcomes` (backfilled above) — nothing to transform on
     // the miss records themselves, so the migration is just the version bump.
     if (!merged.version || merged.version === 1) merged.version = 2;
     return merged;
   }
 
+  /**
+   * Writes `db` to chrome.storage.local. A write failure here is silent data
+   * loss unless we surface it — chrome.storage.local.set can fail two ways:
+   * the promise it returns rejects (the normal MV3 path), or it resolves but
+   * leaves chrome.runtime.lastError set (the older callback-API failure
+   * signal, kept here defensively in case any environment still uses it).
+   * Both are checked.
+   *
+   * The only failure we can recover from automatically is quota exhaustion
+   * (chrome.storage.local's ~10MB cap): `backups` is the biggest single
+   * thing under our control, so dropping the OLDEST entry (backups[0] is
+   * newest, see snapshotIfDue) and retrying once is a reasonable
+   * self-repair. If that retry still fails — quota exhaustion from `misses`
+   * itself, or any non-quota error — the error is re-thrown so every caller
+   * (they all already `await write(db)`) sees a rejected promise instead of
+   * data quietly not being saved.
+   */
   async function write(db) {
-    await chrome.storage.local.set({ [KEY]: db });
-    return db;
+    const attempt = async (payload) => {
+      await chrome.storage.local.set({ [KEY]: payload });
+      const err = globalThis.chrome && chrome.runtime && chrome.runtime.lastError;
+      if (err) throw new Error(err.message || 'chrome.storage.local.set failed');
+    };
+
+    try {
+      await attempt(db);
+      return db;
+    } catch (err) {
+      if (!Array.isArray(db.backups) || !db.backups.length) throw err;
+      const shrunk = { ...db, backups: db.backups.slice(0, -1) };
+      await attempt(shrunk); // let this one throw uncaught if it still fails
+      db.backups = shrunk.backups; // keep the caller's in-memory db in sync with what actually landed
+      return db;
+    }
   }
 
   /**
@@ -204,6 +239,11 @@
     },
 
     fingerprint,
+    // Exposed alongside fingerprint so the pure-function test harness
+    // (tests/test.html) can exercise the legacy-reason migration table
+    // directly instead of round-tripping through storage. Not called
+    // anywhere else in the extension outside normalizeMiss.
+    migrateReason,
 
     /** The existing record for this question, if you've missed it before. */
     async findRepeat(question) {
@@ -438,6 +478,20 @@
       const db = await read();
       const newest = db.backups[0];
       if (newest && Date.now() - newest.ts < 86400000) return false;
+
+      // chrome.storage.local's cap is ~10MB (QUOTA_BYTES). `backups` holds up
+      // to 3 full copies of misses+outcomes, so it's what pushes a blob
+      // toward that ceiling fastest. QUOTA_WARN_BYTES is ~70% of the quota —
+      // crossing it prunes down to just the newest backup *before* adding
+      // another, so normal growth never has to fall back on write()'s
+      // drop-oldest-and-retry recovery in the first place.
+      const QUOTA_WARN_BYTES = 7_000_000; // ~70% of chrome.storage.local's ~10MB cap
+      const size = JSON.stringify(db).length;
+      if (size > QUOTA_WARN_BYTES) {
+        console.warn(`[Cert Buddy] storage blob is ${size} bytes (over the ${QUOTA_WARN_BYTES}-byte warn threshold) — pruning backups to 1`);
+        db.backups = db.backups.slice(0, 1);
+      }
+
       // structuredClone-ish: no shared refs with live data
       const misses = JSON.parse(JSON.stringify(db.misses));
       const outcomes = JSON.parse(JSON.stringify(db.outcomes));

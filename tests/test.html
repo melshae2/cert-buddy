@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cert Buddy — pure-function tests</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 900px; margin: 40px auto; padding: 0 20px;
+    background: #fafbf9; color: #14171a;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0e1210; color: #e6e9ee; } }
+  h1 { font-size: 16px; }
+  p.hint { font-size: 12px; color: #888; }
+  #summary {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; font-weight: 700;
+    margin: 16px 0; padding: 10px 14px; border-radius: 8px; border: 1px solid transparent;
+  }
+  #summary.pass { background: #e8f7ef; color: #0d5c3d; border-color: #a9ddc4; }
+  #summary.fail { background: #fdecec; color: #8a1f2d; border-color: #e6b3ba; }
+  .group {
+    margin-top: 18px; font-weight: 700; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em; color: #6b7480; border-top: 1px solid #e2e7e3; padding-top: 10px;
+  }
+  .line { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; padding: 2px 0; white-space: pre-wrap; }
+  .line.pass { color: #149463; }
+  .line.fail { color: #c73f52; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>cert-buddy — pure-function test harness</h1>
+<p class="hint">
+  Exercises the pure (no chrome.storage, no DOM) functions in store.js, taxonomy.js and
+  adapters.js directly. No seed data, no mock storage — every expected value below is
+  either a literal computed from reading the source (migrateReason's table, detectWeighted's
+  scoring/cap rules, sessionize's gap math, focusTopics' decay formula) or a deliberate
+  comparative equality (e.g. two differently-formatted strings that must fingerprint the same).
+</p>
+<div id="summary">Running…</div>
+<div id="out"></div>
+
+<!-- Tiny inline chrome stub. The pure functions under test never touch
+     storage — this exists only so nothing throws if that assumption is ever
+     wrong; store.js's read()/write()/clearAll() (which DO use chrome.storage)
+     are never called by this harness. -->
+<script>
+  window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
+</script>
+<script src="../src/lib/store.js"></script>
+<script src="../src/lib/taxonomy.js"></script>
+<script src="../src/content/adapters.js"></script>
+<script>
+(function () {
+  const results = [];
+  let pass = 0, fail = 0;
+
+  function record(ok, label) {
+    results.push({ ok, label });
+    if (ok) pass++; else fail++;
+  }
+  function assert(cond, label) { record(!!cond, label); }
+  function assertEqual(actual, expected, label) {
+    const ok = actual === expected;
+    record(ok, label + (ok ? '' : ` — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`));
+  }
+  function assertNotEqual(actual, expected, label) {
+    const ok = actual !== expected;
+    record(ok, label + (ok ? '' : ' — expected a different value, got the same one'));
+  }
+  function assertClose(actual, expected, tolerance, label) {
+    const ok = typeof actual === 'number' && Math.abs(actual - expected) <= tolerance;
+    record(ok, label + (ok ? '' : ` — expected ~${expected} (±${tolerance}), got ${actual}`));
+  }
+  function group(name) { results.push({ group: name }); }
+
+  const Store = window.CertBuddyStore;
+  const Tax = window.CertBuddyTaxonomy;
+  const Adapters = window.CertBuddyAdapters;
+
+  // =====================================================================
+  group('fingerprint (store.js)');
+  // =====================================================================
+  {
+    const quickFox = 'The quick brown fox jumps over the lazy dog while studying for the exam diligently.';
+    assertEqual(Store.fingerprint(quickFox), Store.fingerprint(quickFox),
+      'fingerprint: same text twice produces the same fp (stability)');
+
+    const messy = "Hello,   World!!  This... is -- a TEST of the fingerprint function, right?";
+    const clean = "hello world this is a test of the fingerprint function right";
+    // Both normalize (lowercase, strip non a-z0-9) to the identical 50-char
+    // string "helloworldthisisatestofthefingerprintfunctionright" — verified
+    // independently before writing this assertion.
+    assertEqual(Store.fingerprint(messy), Store.fingerprint(clean),
+      'fingerprint: whitespace/punctuation-insensitive (differently formatted, same normalized text)');
+
+    assertEqual(Store.fingerprint('Short one!'), '',
+      "fingerprint: '<25 alnum chars' returns '' (\"Short one!\" normalizes to 8 chars)");
+
+    // Exact threshold: normalizeMiss's fingerprint() requires norm.length >= 25.
+    assertEqual(Store.fingerprint('abcdefghijklmnopqrstuvwx'), '',
+      'fingerprint: exactly 24 alnum chars (one below threshold) returns \'\'');
+    assertNotEqual(Store.fingerprint('abcdefghijklmnopqrstuvwxy'), '',
+      'fingerprint: exactly 25 alnum chars (at threshold) returns a non-empty fp');
+
+    // 300-char truncation window: fingerprint hashes norm.slice(0, 300), so
+    // content beyond char 300 must not affect the result, but a change
+    // WITHIN the first 300 chars must.
+    const base300 = 'a'.repeat(300);
+    const beyondA = base300 + 'XXXXXXXXXX';
+    const beyondB = base300 + 'ZZZZZZZZZZZZZZZZZZZZ';
+    assertEqual(Store.fingerprint(beyondA), Store.fingerprint(beyondB),
+      'fingerprint: two strings sharing the first 300 alnum chars fp identically regardless of what follows');
+    const within = 'b' + 'a'.repeat(299) + 'XXXXXXXXXX'; // differs at position 0, inside the window
+    assertNotEqual(Store.fingerprint(beyondA), Store.fingerprint(within),
+      'fingerprint: a change WITHIN the first 300 chars does change the fp');
+
+    assertNotEqual(Store.fingerprint(quickFox), Store.fingerprint(messy),
+      'fingerprint: unrelated questions produce different fps (sanity)');
+  }
+
+  // =====================================================================
+  group('migrateReason (store.js)');
+  // =====================================================================
+  {
+    // All 7 legacy ids from the pre-taxonomy-v2 7-bucket reason model,
+    // mapped per store.js's LEGACY_REASON_MAP.
+    const legacy = {
+      'didnt-know': 'never-learned',
+      'confused-two': 'never-learned',
+      'fact-recall': 'no-recall',
+      'narrowed-wrong': 'no-recall',
+      'misread': 'misread',
+      'missed-constraint': 'misread',
+      'careless': 'misread'
+    };
+    for (const [id, expected] of Object.entries(legacy)) {
+      assertEqual(Store.migrateReason(id), expected, `migrateReason: legacy '${id}' -> '${expected}'`);
+    }
+
+    // Current 3-bucket ids pass through unchanged.
+    assertEqual(Store.migrateReason('never-learned'), 'never-learned', "migrateReason: new id 'never-learned' passes through");
+    assertEqual(Store.migrateReason('no-recall'), 'no-recall', "migrateReason: new id 'no-recall' passes through");
+
+    // Unrecognised / empty.
+    assertEqual(Store.migrateReason('totally-bogus-id'), '', "migrateReason: unknown id -> ''");
+    assertEqual(Store.migrateReason(''), '', "migrateReason: empty string -> ''");
+    assertEqual(Store.migrateReason(null), '', 'migrateReason: null -> \'\'');
+    assertEqual(Store.migrateReason(undefined), '', "migrateReason: undefined -> ''");
+  }
+
+  // =====================================================================
+  group('sessionize (store.js)');
+  // =====================================================================
+  {
+    const GAP_MS = 90 * 60 * 1000;
+    const BASE = 1000000000000;
+    const MIN = 60000;
+
+    // --- 90-minute boundary, isolated from the 3-session fixture below ---
+    const b1 = { id: 'bnd1', ts: BASE, attempts: [BASE] };
+    const b2 = { id: 'bnd2', ts: BASE + GAP_MS, attempts: [BASE + GAP_MS] };
+    assertEqual(Store.sessionize([b1, b2]).length, 1,
+      'sessionize: a gap of EXACTLY 90 minutes still merges into one session');
+
+    const b3 = { id: 'bnd3', ts: BASE, attempts: [BASE] };
+    const b4 = { id: 'bnd4', ts: BASE + GAP_MS + 1, attempts: [BASE + GAP_MS + 1] };
+    assertEqual(Store.sessionize([b3, b4]).length, 2,
+      'sessionize: a gap of 90 minutes + 1ms starts a new session');
+
+    // --- 3 synthetic sessions, built newest-cluster-first for readability,
+    //     but passed to sessionize() in shuffled order to prove it does its
+    //     own sorting rather than trusting caller order. ---
+    const c1 = { id: 'C1', ts: BASE + 300 * MIN, attempts: [BASE + 300 * MIN] };
+    const c2 = { id: 'C2', ts: BASE + 310 * MIN, attempts: [BASE + 310 * MIN] }; // 10 min after c1 -> same session
+    const b_1 = { id: 'B1', ts: BASE + 150 * MIN, attempts: [BASE + 150 * MIN] }; // 160 min before c2 -> new session
+    const b_2 = { id: 'B2', ts: BASE + 140 * MIN, attempts: [BASE + 140 * MIN] }; // 10 min before b1 -> same session
+    const a1 = { id: 'A1', ts: BASE + 0, attempts: [BASE + 0] }; // 140 min before b2 -> new session
+    const a2 = { id: 'A2', ts: BASE - 5 * MIN, attempts: [BASE - 5 * MIN] }; // 5 min before a1 -> same session
+
+    const sessions = Store.sessionize([b_1, c2, a2, c1, b_2, a1]); // shuffled input
+
+    assertEqual(sessions.length, 3, 'sessionize: 3 synthetic clusters group into 3 sessions');
+
+    const has = (session, id) => !!(session && session.misses.some((m) => m.id === id));
+    assert(sessions[0] && has(sessions[0], 'C1') && has(sessions[0], 'C2') && sessions[0].misses.length === 2,
+      'sessionize: newest session (index 0) contains exactly C1 + C2');
+    assert(sessions[1] && has(sessions[1], 'B1') && has(sessions[1], 'B2') && sessions[1].misses.length === 2,
+      'sessionize: middle session (index 1) contains exactly B1 + B2');
+    assert(sessions[2] && has(sessions[2], 'A1') && has(sessions[2], 'A2') && sessions[2].misses.length === 2,
+      'sessionize: oldest session (index 2) contains exactly A1 + A2');
+
+    assert(sessions[0].end > sessions[1].end, 'sessionize: ordering — session[0].end > session[1].end (newest first)');
+    assert(sessions[1].end > sessions[2].end, 'sessionize: ordering — session[1].end > session[2].end (newest first)');
+  }
+
+  // =====================================================================
+  group('focusTopics (store.js)');
+  // =====================================================================
+  {
+    const NOW = 2000000000000;
+    const DAY = 86400000;
+
+    // --- decay halves at 14 days ---
+    const m14 = { id: 'd14', fp: 'fp-d14', attempts: [NOW - 14 * DAY], rights: [], topics: ['iam'] };
+    const m0 = { id: 'd0', fp: 'fp-d0', attempts: [NOW], rights: [], topics: ['sts'] };
+    const decayResult = Store.focusTopics([m14, m0], NOW, []);
+    const w14 = (decayResult.find((r) => r.topic === 'iam') || {}).weight;
+    const w0 = (decayResult.find((r) => r.topic === 'sts') || {}).weight;
+    assertClose(w0, 1, 0.0001, "focusTopics: an attempt from 'now' has decay weight 1");
+    assertClose(w14, 0.5, 0.01, 'focusTopics: a 14-day-old attempt decays to ~0.5 (tolerance 0.01)');
+    assertClose(w14, w0 * 0.5, 0.01, "focusTopics: 14-day-old weight ≈ half of today's (half-life check)");
+
+    // --- rights subtract (isolated per-topic so the two scenarios don't merge) ---
+    const mNoRight = { id: 'nr1', fp: 'fp-nr1', attempts: [NOW], rights: [], topics: ['ec2'] };
+    const mWithRight = { id: 'wr1', fp: 'fp-wr1', attempts: [NOW], rights: [NOW], topics: ['lambda'] };
+    const rightsResult = Store.focusTopics([mNoRight, mWithRight], NOW, []);
+    const wEc2 = (rightsResult.find((r) => r.topic === 'ec2') || {}).weight;
+    const wLambda = (rightsResult.find((r) => r.topic === 'lambda') || {}).weight;
+    assertClose(wEc2, 1, 0.0001, 'focusTopics: a miss with no right keeps its full decayed weight');
+    assertClose(wLambda, 0, 0.0001, 'focusTopics: a same-day right subtracts and cancels a same-day miss (rights subtract)');
+
+    // --- rights DON'T subtract when the outcomes array flags the fp memorized ---
+    const mMemo = { id: 'memo1', fp: 'fp-memo1', attempts: [NOW], rights: [NOW], topics: ['kms'] };
+    const memoOff = Store.focusTopics([mMemo], NOW, []);
+    const memoOn = Store.focusTopics([mMemo], NOW, [{ fp: 'fp-memo1', confidence: 'memorized' }]);
+    const wOff = (memoOff.find((r) => r.topic === 'kms') || {}).weight;
+    const wOn = (memoOn.find((r) => r.topic === 'kms') || {}).weight;
+    assertClose(wOff, 0, 0.0001, 'focusTopics: without a memorized outcome, the right subtracts as normal (weight ≈ 0)');
+    assertClose(wOn, 1, 0.0001, 'focusTopics: WITH a memorized outcome for this fp, right-subtraction is skipped (full weight retained)');
+
+    // --- omitted outcomes arg reproduces legacy (pre-existing) behavior ---
+    const memoOmitted = Store.focusTopics([mMemo], NOW); // no 3rd argument at all
+    const wOmitted = (memoOmitted.find((r) => r.topic === 'kms') || {}).weight;
+    assertClose(wOmitted, wOff, 0.0001, 'focusTopics: omitting the outcomes arg entirely matches passing outcomes=[] (legacy behavior preserved)');
+  }
+
+  // =====================================================================
+  group('detectWeighted (taxonomy.js)');
+  // =====================================================================
+  {
+    // 6 distinct non-concept topics mentioned ONLY in correctAnswer (score 2
+    // each, apply-eligible) — one more than the apply cap of 5.
+    const capResult = Tax.detectWeighted({
+      question: 'Compare rds and dynamodb and redshift and kinesis and athena options for this workload.',
+      yourAnswer: '',
+      correctAnswer: 'The correct choice ties together iam permissions, sts tokens, vpc networking, a nat gateway for egress, an ec2 instance, and a lambda function.'
+    });
+    assertEqual(JSON.stringify(capResult.apply), JSON.stringify(['iam', 'sts', 'vpc', 'nat', 'ec2']),
+      "detectWeighted: 6 score-2 topics in correctAnswer -> apply keeps only the first 5 (cap), drops 'lambda'");
+    assertEqual(capResult.apply.length, 5, 'detectWeighted: apply is capped at 5');
+    assertEqual(JSON.stringify(capResult.suggest), JSON.stringify(['rds', 'dynamodb', 'redshift', 'kinesis']),
+      "detectWeighted: 5 score-1 topics in question -> suggest keeps only the first 4 (cap), drops 'athena'");
+    assertEqual(capResult.suggest.length, 4, 'detectWeighted: suggest is capped at 4');
+
+    // Concept-category gate: a concept topic mentioned once in `question`
+    // ONLY (score 1) is dropped entirely — not applied, not suggested — but
+    // a concept topic mentioned in `correctAnswer` (score 2) still applies.
+    const conceptResult = Tax.detectWeighted({
+      question: 'This design must be highly available across zones.',
+      yourAnswer: '',
+      correctAnswer: 'The team prioritizes disaster recovery for this workload.'
+    });
+    assert(!conceptResult.apply.includes('ha') && !conceptResult.suggest.includes('ha'),
+      "detectWeighted: concept topic 'ha' at score 1 (question only) is dropped entirely, not suggested");
+    assert(conceptResult.apply.includes('dr'),
+      "detectWeighted: concept topic 'dr' at score 2 (correctAnswer) still applies despite being a concept");
+  }
+
+  // =====================================================================
+  group('detectDiscriminator (adapters.js)');
+  // =====================================================================
+  {
+    const discCases = [
+      ['Which option is the most cost-effective choice for this workload?', 'cost'],
+      ['Which solution requires the least operational overhead to maintain?', 'ops'],
+      ['The application must meet an RTO of under five minutes.', 'rto-rpo'],
+      ['Which configuration provides the lowest latency for end users?', 'perf'],
+      ['Which architecture is the most secure option available?', 'security'],
+      ['The team needs a migration path with minimal downtime for end users.', 'migration'],
+      ['This question does not mention any specific optimization goal at all.', '']
+    ];
+    for (const [stem, expected] of discCases) {
+      assertEqual(Adapters.detectDiscriminator(stem), expected,
+        `detectDiscriminator: ${expected ? `'${expected}'` : 'no-match'} <- "${stem.slice(0, 44)}…"`);
+    }
+  }
+
+  // =====================================================================
+  group('detectExam (adapters.js)');
+  // =====================================================================
+  {
+    assertEqual(Adapters.detectExam('This practice test covers the SAP-C02 exam objectives in depth.'), 'SAP-C02',
+      'detectExam: direct code match (SAP-C02)');
+    assertEqual(Adapters.detectExam('prepping for the saa-c03 certification path'), 'SAA-C03',
+      'detectExam: direct code match is case-insensitive (saa-c03 -> SAA-C03)');
+    assertEqual(
+      Adapters.detectExam('AWS Certified Solutions Architect – Professional practice exams, 500 questions'),
+      'SAP-C02',
+      'detectExam: course-name fallback (no code present, "Solutions Architect – Professional" -> SAP-C02)'
+    );
+    assertEqual(Adapters.detectExam('General trivia quiz about world capitals and geography.'), '',
+      'detectExam: no code, no course-name match -> \'\'');
+  }
+
+  // ---- render ------------------------------------------------------------
+  const out = document.getElementById('out');
+  let html = '';
+  for (const r of results) {
+    if (r.group) {
+      html += `<div class="group">${r.group}</div>`;
+    } else {
+      html += `<div class="line ${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'} — ${r.label}</div>`;
+    }
+  }
+  out.innerHTML = html;
+
+  const summary = document.getElementById('summary');
+  summary.className = fail === 0 ? 'pass' : 'fail';
+  summary.textContent = `${pass}/${pass + fail} assertions passed` + (fail ? ` — ${fail} FAILED` : ' — ALL PASS');
+  // Exposed for programmatic verification (e.g. the javascript_tool during review).
+  window.__testSummary = { pass, fail, total: pass + fail };
+})();
+</script>
+</body>
+</html>
