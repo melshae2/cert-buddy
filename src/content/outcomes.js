@@ -231,6 +231,16 @@
 
     document.documentElement.appendChild(host);
 
+    // Same fullscreen ride-along as the tagger: element-fullscreen would hide
+    // the toast, and this toast IS the confidence feature during an exam.
+    document.addEventListener('fullscreenchange', () => {
+      const fs = document.fullscreenElement;
+      if (fs && !fs.contains(host)) fs.appendChild(host);
+      else if (!fs && host.parentElement !== document.documentElement) {
+        document.documentElement.appendChild(host);
+      }
+    });
+
     for (const btn of shadow.querySelectorAll('.btn')) {
       btn.addEventListener('click', () => chooseConfidence(btn.dataset.val));
     }

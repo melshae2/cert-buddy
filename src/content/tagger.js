@@ -828,4 +828,15 @@
   setTimeout(dropBadgeIfPlayerIframe, 1500); // players often mount late
 
   document.documentElement.appendChild(host);
+
+  // Element-fullscreen (Udemy's expand control) renders ONLY the fullscreened
+  // subtree — UI mounted outside it silently disappears. Ride along by
+  // re-parenting into the fullscreen element, and move back out on exit.
+  document.addEventListener('fullscreenchange', () => {
+    const fs = document.fullscreenElement;
+    if (fs && !fs.contains(host)) fs.appendChild(host);
+    else if (!fs && host.parentElement !== document.documentElement) {
+      document.documentElement.appendChild(host);
+    }
+  });
 })();
