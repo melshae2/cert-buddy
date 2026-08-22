@@ -1018,6 +1018,15 @@
   // caught below.
   const RESTRICTED_URL_RE = /^(chrome|chrome-extension|edge|about|devtools):/i;
 
+  // Sites the content script already runs on natively (see manifest.json's
+  // content_scripts.matches) — the "enable logging here" bar exists only to
+  // cover everything ELSE, so it must recognize every host that's already
+  // covered, not just Udemy.
+  const SUPPORTED_HOSTS = [
+    (h) => /(^|\.)udemy\.com$/i.test(h),
+    (h) => /(^|\.)tutorialsdojo\.com$/i.test(h)
+  ];
+
   async function checkActiveTab() {
     const bar = $('notUdemyBar');
     bar.hidden = true;
@@ -1038,7 +1047,7 @@
     } catch (e) {
       return;
     }
-    if (/(^|\.)udemy\.com$/i.test(host)) return;
+    if (SUPPORTED_HOSTS.some((test) => test(host))) return;
 
     activeTabId = tab.id;
     bar.hidden = false;

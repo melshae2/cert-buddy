@@ -99,9 +99,15 @@
     return preferred.length ? preferred : candidates;
   }
 
-  function handleCandidate(el) {
+  /**
+   * `forcedOutcome` lets the wpProQuiz attribute-toggle path (below) hand
+   * over an outcome it already knows from a class token, instead of this
+   * function re-deriving one from banner text that may not even say
+   * "correct"/"incorrect" for that markup.
+   */
+  function handleCandidate(el, forcedOutcome) {
     const t = safe(() => (el.innerText || el.textContent || '').trim(), '');
-    const outcome = /^correct/i.test(t) ? 'correct' : 'incorrect';
+    const outcome = forcedOutcome || (/^correct/i.test(t) ? 'correct' : 'incorrect');
 
     const data = safe(() => Adapters.extract(), null);
     if (!data) return;
@@ -127,13 +133,83 @@
       .catch((e) => console.debug('[Cert Buddy] logOutcome failed', e));
   }
 
+  /**
+   * Tutorials Dojo's quiz engine (wpProQuiz) reveals its Correct!/
+   * Incorrect! feedback box by toggling `style.display` (or a class) on a
+   * box that already exists in the DOM, hidden, from page load — the
+   * addedNodes-based scan above never sees this, since nothing is ADDED.
+   * Computed once at load so every attribute-mutation callback can bail in
+   * one boolean check instead of doing any class-string work — Udemy's own
+   * player mutates style/class plenty, and none of that should pay the cost
+   * of a closest()/class scan just to find out it isn't this site.
+   */
+  // The `|| globalThis.__certBuddyForceTutorialsDojo` half exists only for a
+  // local test harness served off http://localhost, which obviously can't
+  // navigate to a real *.tutorialsdojo.com origin to exercise this path —
+  // that global is never set on a real page, so real-site behavior is
+  // governed by the hostname check alone.
+  const IS_TUTORIALS_DOJO =
+    /(^|\.)tutorialsdojo\.com$/i.test(location.hostname) ||
+    !!globalThis.__certBuddyForceTutorialsDojo;
+
+  /**
+   * True if `el` itself carries the wpProQuiz_correct/incorrect class token
+   * (separator-guarded, same idea as adapters.js's `marks()`, so
+   * "incorrect" can never read as containing "correct"). Returns '' if
+   * neither.
+   */
+  function wpProQuizOutcomeClass(el) {
+    const cls = typeof el.className === 'string' ? el.className : '';
+    if (/(?:^|\s)wpProQuiz_correct(?:\s|$)/.test(cls)) return 'correct';
+    if (/(?:^|\s)wpProQuiz_incorrect(?:\s|$)/.test(cls)) return 'incorrect';
+    return '';
+  }
+
+  // outcomes.js's own tiny visibility check — adapters.js's `isVisible` isn't
+  // exported, and duplicating a one-line getClientRects check isn't worth
+  // widening that module's public surface for.
+  const isNowVisible = (el) => !!(el && el.getClientRects && el.getClientRects().length);
+
+  /**
+   * Scans one MutationObserver batch for a wpProQuiz feedback box that just
+   * became visible via a style/class attribute change. `mutation.target` is
+   * either the box itself or a descendant whose own attribute changed
+   * (e.g. an inner span) — closest() covers the latter.
+   */
+  function collectAttributeCandidates(mutations) {
+    if (!IS_TUTORIALS_DOJO) return [];
+    const found = new Map(); // element -> outcome
+    for (const mut of mutations) {
+      if (mut.type !== 'attributes') continue;
+      const el = mut.target;
+      if (!el || el.nodeType !== 1) continue;
+      let outcomeEl = el;
+      let outcome = wpProQuizOutcomeClass(el);
+      if (!outcome) {
+        const closest = safe(() => el.closest('.wpProQuiz_correct,.wpProQuiz_incorrect'), null);
+        if (closest) {
+          outcomeEl = closest;
+          outcome = wpProQuizOutcomeClass(closest);
+        }
+      }
+      if (outcome && isNowVisible(outcomeEl)) found.set(outcomeEl, outcome);
+    }
+    return outermost([...found.keys()]).map((el) => ({ el, outcome: found.get(el) }));
+  }
+
   const observer = new MutationObserver((mutations) => {
     for (const el of collectCandidates(mutations)) handleCandidate(el);
+    for (const { el, outcome } of collectAttributeCandidates(mutations)) handleCandidate(el, outcome);
   });
 
   function startObserving() {
     if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      });
     } else {
       document.addEventListener('DOMContentLoaded', startObserving, { once: true });
     }

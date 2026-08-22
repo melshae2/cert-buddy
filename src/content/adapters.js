@@ -117,7 +117,12 @@
   const NAV_SEL =
     '[data-purpose="questions-list"],[data-purpose="question-navigation-item"],' +
     '[class*="question-navigation"],[class*="sidenav"],[class*="sidebar"],' +
-    '[class*="footer"],[data-purpose*="footer"],nav,aside,footer,header';
+    '[class*="footer"],[data-purpose*="footer"],nav,aside,footer,header,' +
+    // Tutorials Dojo (wpProQuiz): the review grid / results list is the same
+    // trap as Udemy's question-navigation sidebar — every question in the
+    // test gets a "Correct answer" style marker in there, so an unscoped
+    // scan would happily attribute question 40's result to question 3.
+    '.wpProQuiz_reviewDiv,.wpProQuiz_results,.wpProQuiz_resultsList,[class*="wpProQuiz_review"]';
 
   /**
    * True nav/sidebar/footer — but a matched "nav" that CONTAINS the answer
@@ -275,6 +280,85 @@
   };
 
   /* ------------------------------------------------------------------ *
+   * TUTORIALS DOJO — wpProQuiz (the WordPress/LearnDash-family quiz     *
+   * engine portal.tutorialsdojo.com runs practice exams on).            *
+   *                                                                     *
+   * Review-mode pages keep EVERY question in the test in the DOM at     *
+   * once as sibling .wpProQuiz_listItem blocks, with only the current   *
+   * one visible via a display toggle — the identical stale-DOM trap as  *
+   * Udemy's SPA player (see `isVisible` above), so every lookup here is *
+   * scoped to the one visible block, never document-wide. Options are   *
+   * real radio/checkbox inputs. The correct option's <li> carries       *
+   * `wpProQuiz_answerCorrect`; a wrong SELECTED option's <li> carries    *
+   * `wpProQuiz_answerIncorrect`. A "Category: …" line sits above the    *
+   * stem but is a SIBLING of .wpProQuiz_question_text, not a child of   *
+   * it, so scoping the question read to that element alone already      *
+   * excludes it.                                                        *
+   * ------------------------------------------------------------------ */
+
+  /** The one visible question block, or its nearest ancestor if the
+   *  .wpProQuiz_listItem wrapper isn't present in some markup variant. */
+  function tdVisibleBlock() {
+    const items = [...document.querySelectorAll('.wpProQuiz_listItem')].filter(isVisible);
+    if (items.length) return items[0];
+    const texts = [...document.querySelectorAll('.wpProQuiz_question_text')].filter(isVisible);
+    if (!texts.length) return null;
+    return (
+      texts[0].closest('.wpProQuiz_listItem') ||
+      texts[0].closest('.wpProQuiz_question') ||
+      texts[0].parentElement
+    );
+  }
+
+  const tutorialsDojoAdapter = {
+    name: 'tutorials-dojo',
+    enabled: true,
+    // wpProQuiz's stale hidden siblings make the generic document-wide
+    // heuristics actively dangerous here (they'd happily scrape question 12
+    // while question 34 is on screen) — safer to return partial data for a
+    // field this adapter couldn't resolve than to have extract() backfill it
+    // from the wrong question. See extract()'s use of this flag below.
+    noGenericBackfill: true,
+    match: (loc) =>
+      loc.hostname === 'portal.tutorialsdojo.com' || loc.hostname.endsWith('.tutorialsdojo.com'),
+    extract() {
+      const out = { question: '', yourAnswer: '', correctAnswer: '' };
+      const block = tdVisibleBlock();
+      if (!block) return out;
+
+      const stemEl = block.querySelector('.wpProQuiz_question_text');
+      if (stemEl) {
+        // Defensive clone-and-strip: the Category line is normally a
+        // sibling, not a descendant, of .wpProQuiz_question_text — but if
+        // some template variant ever nests it inside, don't trust structure
+        // alone to keep it out of the stem.
+        const clone = stemEl.cloneNode(true);
+        for (const cat of clone.querySelectorAll('.wpProQuiz_category')) cat.remove();
+        out.question = truncate(text(clone));
+      }
+
+      const options = [...block.querySelectorAll('li.wpProQuiz_questionListItem')].filter(isVisible);
+      const yours = [];
+      const right = [];
+      for (const li of options) {
+        const input = li.querySelector('.wpProQuiz_questionInput');
+        const label = labelTextFor(input) || text(li);
+        if (!label) continue;
+        if (input && input.checked) yours.push(label);
+        if (li.classList.contains('wpProQuiz_answerCorrect')) right.push(label);
+      }
+      // Multi-select ("Select TWO") questions legitimately have several of
+      // each; single-select questions just get one-element arrays.
+      out.yourAnswer = yours.join(' | ');
+      // Stays '' until the review UI actually marks a correct <li> — never
+      // guessed at from elsewhere on the page.
+      out.correctAnswer = right.join(' | ');
+
+      return out;
+    }
+  };
+
+  /* ------------------------------------------------------------------ *
    * TEMPLATE — copy me, don't ship me. Kept disabled so it never fires. *
    * ------------------------------------------------------------------ */
   const templateAdapter = {
@@ -402,7 +486,7 @@
     return blocks.sort((a, b) => b.length - a.length)[0] || '';
   }
 
-  const ADAPTERS = [udemyAdapter, templateAdapter, genericAdapter];
+  const ADAPTERS = [udemyAdapter, tutorialsDojoAdapter, templateAdapter, genericAdapter];
 
   root.CertBuddyAdapters = {
     detectExam,
@@ -421,8 +505,15 @@
         genericAdapter;
 
       const data = safe(() => adapter.extract(), {}) || {};
+      // Some adapters (tutorialsDojoAdapter — see its noGenericBackfill
+      // comment) opt out of the generic backfill entirely: on pages where
+      // stale hidden siblings are the norm, a document-wide heuristic
+      // filling in a field the real adapter left blank is more likely to
+      // silently substitute the WRONG question's text than to help.
       const fallback =
-        adapter === genericAdapter ? {} : safe(() => genericAdapter.extract(), {}) || {};
+        adapter === genericAdapter || adapter.noGenericBackfill
+          ? {}
+          : safe(() => genericAdapter.extract(), {}) || {};
 
       const merged = { question: '', yourAnswer: '', correctAnswer: '' };
       const usedFallback = [];
