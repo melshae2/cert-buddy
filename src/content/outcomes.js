@@ -389,7 +389,7 @@
         <div class="stage1" id="stage1">
           <span class="label">How confident?<span class="seen" id="toastSeen" hidden> · seen before</span></span>
           <div class="btns">
-            <button type="button" class="btn" data-val="knew">knew it<span class="k">1</span></button>
+            <button type="button" class="btn" data-val="knew"><span id="knewLabel">knew it</span><span class="k">1</span></button>
             <button type="button" class="btn" data-val="narrowed">between 2<span class="k">2</span></button>
             <button type="button" class="btn" data-val="guessed">guessed<span class="k">3</span></button>
             <button type="button" class="btn" data-val="memorized">memorized<span class="k">4</span></button>
@@ -495,6 +495,16 @@
     stage1El.hidden = false;
     stage2El.hidden = true;
     for (const b of toastShadow.querySelectorAll('.stage1 .btn')) b.classList.remove('flash');
+
+    // The toast speaks a different dialect per outcome. On a WRONG answer,
+    // "knew it" reads absurd and "memorized" is impossible (you can't have
+    // memorized the right answer and picked the wrong one) — so the knew
+    // button relabels to "was sure" (same 'knew' id: confident-but-wrong is
+    // the misconception signal the calibration chart keys on) and memorized
+    // hides, its key going inert via the same hidden check.
+    const wrong = outcome === 'incorrect';
+    toastShadow.getElementById('knewLabel').textContent = wrong ? 'was sure' : 'knew it';
+    toastShadow.querySelector('.stage1 .btn[data-val="memorized"]').hidden = wrong;
 
     // Change-blindness fix: the banner's own render masks a simultaneous
     // onset, so the toast enters ~400ms later, once the scene has settled —
@@ -655,6 +665,8 @@
       if (e.altKey || e.ctrlKey || e.metaKey) return; // plain keys only
       const value = CONFIDENCE_KEYS[e.key];
       if (!value) return;
+      const btnFor = toastShadow.querySelector(`.stage1 .btn[data-val="${value}"]`);
+      if (btnFor && btnFor.hidden) return; // e.g. memorized on a wrong answer
       if (isTypingTarget(e)) return;
       e.preventDefault();
       chooseConfidence(value);
