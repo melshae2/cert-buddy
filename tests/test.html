@@ -46,9 +46,9 @@
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js"></script>
-<script src="../src/lib/taxonomy.js"></script>
-<script src="../src/content/adapters.js"></script>
+<script src="../src/lib/store.js?v=150"></script>
+<script src="../src/lib/taxonomy.js?v=150"></script>
+<script src="../src/content/adapters.js?v=150"></script>
 <script>
 (function () {
   const results = [];
@@ -146,6 +146,40 @@
     assertEqual(Store.migrateReason(''), '', "migrateReason: empty string -> ''");
     assertEqual(Store.migrateReason(null), '', 'migrateReason: null -> \'\'');
     assertEqual(Store.migrateReason(undefined), '', "migrateReason: undefined -> ''");
+  }
+
+  // =====================================================================
+  group("confidence migration: 'unsure' -> 'narrowed' (store.js)");
+  // =====================================================================
+  {
+    // Minimal-but-valid fixtures — normalizeMiss reads m.ts (attempts
+    // fallback) and m.question (fp fallback) even though this test only
+    // cares about the confidence field.
+    const baseMiss = {
+      id: 'migm1',
+      ts: 1700000000000,
+      question: 'A sufficiently long dummy question text for fingerprinting purposes here.',
+      reason: '',
+      attempts: [1700000000000]
+    };
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'unsure' }).confidence, 'narrowed',
+      "normalizeMiss: legacy stored confidence 'unsure' reads back as 'narrowed'");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'knew' }).confidence, 'knew',
+      "normalizeMiss: current confidence id 'knew' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'narrowed' }).confidence, 'narrowed',
+      "normalizeMiss: current confidence id 'narrowed' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'memorized' }).confidence, 'memorized',
+      "normalizeMiss: current confidence id 'memorized' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: null }).confidence, null,
+      'normalizeMiss: null confidence (never rated) stays null, not migrated to anything');
+
+    const baseOutcome = { id: 'migo1', fp: 'fpmigrationtest', outcome: 'correct', ts: 1700000000000, attempts: [1700000000000] };
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'unsure' }).confidence, 'narrowed',
+      "normalizeOutcome: legacy stored confidence 'unsure' reads back as 'narrowed'");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'guessed' }).confidence, 'guessed',
+      "normalizeOutcome: current confidence id 'guessed' passes through unchanged");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: null }).confidence, null,
+      'normalizeOutcome: null confidence stays null, not migrated to anything');
   }
 
   // =====================================================================

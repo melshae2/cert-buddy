@@ -519,9 +519,17 @@
     const rights = prior.rights || [];
     const lastRight = rights.length ? rights[rights.length - 1] : 0;
 
+    // Auto-capture (outcomes.js) now usually beats you to this record: the
+    // panel opening right after commonly finds ITS OWN just-created record,
+    // not a genuine repeat from a past session. "missed N× before" reads as
+    // a lie in that case — softened whenever the newest attempt is fresh
+    // enough to plausibly be this same sitting, same threshold either way.
+    const SAME_SESSION_MS = 10 * 60 * 1000;
     if (lastRight > last) {
       banner.classList.add('danger');
       banner.textContent = `REGRESSION — you had this one right on ${new Date(lastRight).toLocaleDateString()}.`;
+    } else if (Date.now() - last < SAME_SESSION_MS) {
+      banner.textContent = 'auto-captured just now — editing the same record.';
     } else {
       banner.textContent =
         `You've missed this one ${n}× before (last ${relTime(last)}). ` +
@@ -814,6 +822,15 @@
     },
     true
   );
+
+  // The outcomes toast's stage-2 "details" link opens this same panel — the
+  // two shadow modules share no direct references (see the CustomEvent
+  // dispatch in outcomes.js), so this is the whole interface. Only opens; if
+  // the panel's already open this is a no-op rather than re-running open()
+  // and clobbering whatever the user's already typed into it.
+  window.addEventListener('certbuddy:open-panel', () => {
+    if (panel.hidden) open();
+  });
 
   // Respect per-site "hide the badge" without disabling the hotkey.
   Store.getSettings().then((s) => {

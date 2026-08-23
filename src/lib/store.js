@@ -91,10 +91,25 @@
       // Records that already have the field (including explicit `false` from
       // a quick-save) pass through untouched.
       triaged: m.triaged !== undefined ? !!m.triaged : !!(m.reason || m.fact),
-      // 'knew' | 'unsure' | 'guessed' | null. Backfilled from the outcome
-      // toast (see addMiss) — records that predate confidence just get null.
-      confidence: m.confidence ?? null
+      // 'knew' | 'narrowed' | 'guessed' | 'memorized' | null. Backfilled from
+      // the outcome toast (see addMiss) — records that predate confidence
+      // just get null. Migration: the toast's second button used to be
+      // labeled/valued 'unsure' — old records on disk still carry that
+      // literal string, so it's mapped to the current 'narrowed' here on
+      // every read instead of being rewritten in storage.
+      confidence: m.confidence === 'unsure' ? 'narrowed' : (m.confidence ?? null)
     };
+  }
+
+  /**
+   * Same 'unsure' -> 'narrowed' confidence migration as normalizeMiss, for
+   * outcome records. Deliberately minimal — outcomes otherwise predate no
+   * other fields the way old misses do, so nothing else here is touched or
+   * backfilled.
+   */
+  function normalizeOutcome(o) {
+    if (!o || o.confidence !== 'unsure') return o;
+    return { ...o, confidence: 'narrowed' };
   }
 
   /**
@@ -119,7 +134,7 @@
     // Fill in anything an older/partial blob is missing.
     const merged = Object.assign(emptyDb(), db, {
       misses: (db.misses || []).map(normalizeMiss),
-      outcomes: db.outcomes || [],
+      outcomes: (db.outcomes || []).map(normalizeOutcome),
       backups: db.backups || [],
       settings: Object.assign(emptyDb().settings, db.settings || {})
     });
@@ -194,7 +209,7 @@
    *                                 or reviewed later in the debrief)
    * @property {boolean} shaky      logged as "got it right" but only by guessing — counts like a
    *                                 miss for weak-area weighting
-   * @property {?('knew'|'unsure'|'guessed'|'memorized')} confidence  self-rated confidence, joined
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized')} confidence  self-rated confidence, joined
    *                                 in from the matching Outcome by fp at capture time if not set
    *                                 explicitly. 'memorized' = high certainty, zero reasoning (pure
    *                                 answer-recognition on a reused question) — see focusTopics and
@@ -218,7 +233,7 @@
    * @property {string} fp             fingerprint used to match repeats (same function as Miss.fp)
    * @property {string} questionSnippet  first 200 chars of the question text
    * @property {'correct'|'incorrect'} outcome
-   * @property {?('knew'|'unsure'|'guessed'|'memorized')} confidence  set once via the toast, first
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized')} confidence  set once via the toast, first
    *                                 tap wins
    * @property {string} exam
    * @property {number} ts             epoch ms of the first detection
@@ -244,6 +259,11 @@
     // directly instead of round-tripping through storage. Not called
     // anywhere else in the extension outside normalizeMiss.
     migrateReason,
+    // Same reasoning as migrateReason: lets tests/test.html exercise the
+    // 'unsure' -> 'narrowed' confidence migration (see normalizeMiss /
+    // normalizeOutcome above) directly, without a chrome.storage round trip.
+    normalizeMiss,
+    normalizeOutcome,
 
     /** The existing record for this question, if you've missed it before. */
     async findRepeat(question) {
@@ -273,6 +293,27 @@
     async getMissByFp(fp) {
       if (!fp) return null;
       return (await read()).misses.find((m) => m.fp === fp) || null;
+    },
+
+    /**
+     * Sets the "why" sentence from the outcome toast's stage 2 onto the MISS
+     * record sharing this fp — the auto-capture on an incorrect outcome
+     * always creates one first, so this is normally filling it in seconds
+     * later. Only fills `notes` if it's currently empty; a non-empty notes
+     * field (e.g. a manual tagger edit that landed first) gets the new text
+     * APPENDED with ' · ' rather than overwritten, so neither source of notes
+     * can silently clobber the other. No-op (returns null) if no miss with
+     * this fp exists yet, or the text is empty.
+     */
+    async setNotesByFp(fp, text) {
+      const trimmed = String(text || '').trim();
+      if (!fp || !trimmed) return null;
+      const db = await read();
+      const m = db.misses.find((x) => x.fp === fp);
+      if (!m) return null;
+      m.notes = m.notes ? m.notes + ' · ' + trimmed : trimmed;
+      await write(db);
+      return m;
     },
 
     /**

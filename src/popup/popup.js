@@ -337,19 +337,24 @@
   // in the 400px popup, so those elements simply don't exist there.
 
   const MIN_INSIGHT_N = 5;
-  const CONFIDENCE_ORDER = ['knew', 'unsure', 'guessed', 'memorized'];
+  // 'narrowed' (formerly 'unsure') — the toast's second button, picked when
+  // you've cut the options down but aren't certain. Old outcome/miss records
+  // still on disk with the literal 'unsure' are migrated to 'narrowed' on
+  // every read (see store.js's normalizeMiss/normalizeOutcome), so nothing
+  // downstream of Store.getAll() ever sees the old value.
+  const CONFIDENCE_ORDER = ['knew', 'narrowed', 'guessed', 'memorized'];
   const CONFIDENCE_LABELS = {
     knew: 'Knew it',
-    unsure: 'Unsure',
+    narrowed: 'Narrowed',
     guessed: 'Guessed',
     memorized: 'Memorized'
   };
   // Anchor accuracy each confidence level SHOULD land near — used only to
   // pick which level's actual accuracy is furthest off for the one-line
   // takeaway, never drawn on the chart itself. knew/memorized are near-
-  // certain claims, so ~95%+ is the bar the spec itself names; unsure is
+  // certain claims, so ~95%+ is the bar the spec itself names; narrowed is
   // partial knowledge; guessed is close to chance on 4-option MC.
-  const CONFIDENCE_EXPECTED = { knew: 95, memorized: 95, unsure: 60, guessed: 30 };
+  const CONFIDENCE_EXPECTED = { knew: 95, memorized: 95, narrowed: 60, guessed: 30 };
 
   const insightEmptyHtml = () => `<div class="empty">not enough data yet — keep logging</div>`;
   const insightCardShell = (title, bodyHtml) =>
