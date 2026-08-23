@@ -360,6 +360,22 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
   border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
 }
 
+/* Partial-credit marker: same pill shape as guessed/rights/memorized. Warn-
+   toned by default (got < of, a short answer) — .full switches to
+   accent-toned when got === of, matching rights-pill's "good news" tone. */
+.partial-pill {
+  display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.5;
+  padding: 1px 7px; border-radius: 999px; color: var(--warn);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.partial-pill.full {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 /* Discriminator tag: same shape as a topic chip, mono to read as "system
    metadata" rather than another topic. */
 .tagchip.disc-tag {

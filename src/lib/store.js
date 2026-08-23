@@ -84,6 +84,15 @@
    */
   function normalizeMiss(m) {
     const attempts = Array.isArray(m.attempts) && m.attempts.length ? m.attempts : [m.ts];
+    // Records that already have array fields (post-feature captures) keep
+    // them EXACTLY as stored — never re-derived from yourAnswer/correctAnswer
+    // even if those joined strings were hand-edited later (the popup's
+    // inline editor patches the joined strings but not the arrays; see
+    // tagger.js's save() comment). Only genuinely legacy records (missing
+    // the array fields entirely) get the split-backfill.
+    const yourAnswers = Array.isArray(m.yourAnswers) ? m.yourAnswers : splitJoined(m.yourAnswer);
+    const correctAnswers = Array.isArray(m.correctAnswers) ? m.correctAnswers : splitJoined(m.correctAnswer);
+    const selectCount = m.selectCount || correctAnswers.length || 1;
     return {
       ...m,
       attempts,
@@ -93,6 +102,10 @@
       reason: migrateReason(m.reason),
       shaky: !!m.shaky,
       rights: Array.isArray(m.rights) ? m.rights : [],
+      yourAnswers,
+      correctAnswers,
+      selectCount,
+      partial: computePartial(yourAnswers, correctAnswers, selectCount),
       // Legacy records predate `triaged` entirely — infer it from whether the
       // capture already carried a classification (a reason and/or a fact).
       // Records that already have the field (including explicit `false` from
@@ -124,7 +137,18 @@
   function normalizeOutcome(o) {
     if (!o) return o;
     const confidence = o.confidence === 'unsure' ? 'narrowed' : o.confidence;
-    return { ...o, confidence, confNum: o.confNum ?? null };
+    const yourAnswers = Array.isArray(o.yourAnswers) ? o.yourAnswers : splitJoined(o.yourAnswer);
+    const correctAnswers = Array.isArray(o.correctAnswers) ? o.correctAnswers : splitJoined(o.correctAnswer);
+    const selectCount = o.selectCount || correctAnswers.length || 1;
+    return {
+      ...o,
+      confidence,
+      confNum: o.confNum ?? null,
+      yourAnswers,
+      correctAnswers,
+      selectCount,
+      partial: computePartial(yourAnswers, correctAnswers, selectCount)
+    };
   }
 
   /**
@@ -171,6 +195,41 @@
     const num = Number(n);
     if (!Number.isFinite(num)) return null;
     return Math.min(10, Math.max(1, Math.round(num)));
+  }
+
+  /**
+   * Backfill helper: splits a legacy joined-string answer field (' | '
+   * separated) into an array, for records that predate yourAnswers/
+   * correctAnswers entirely. Trims each piece; a blank/whitespace-only
+   * string is `[]`, a string with no ' | ' delimiter is a one-element array.
+   */
+  function splitJoined(s) {
+    const trimmed = String(s || '').trim();
+    if (!trimmed) return [];
+    return trimmed.split(' | ').map((p) => p.trim());
+  }
+
+  /**
+   * Pure partial-credit calculator: how many of the correct answers are also
+   * in `yours` (trimmed-exact set intersection — order-independent, no
+   * double-counting), out of `of` = max(selectCount, corrects.length) so a
+   * bad/stale selectCount can never under-report the real number of correct
+   * options. Returns null (not a {got:0,of:0}-style zero object) whenever
+   * `of` <= 1 — a single-answer question has nothing "partial" to report,
+   * and every caller must treat null as "don't render a pill" rather than
+   * as a real 0/1 result. Exposed on Store so tests/test.html can exercise
+   * it directly, same reasoning as clampConfNum/migrateReason.
+   */
+  function computePartial(yours, corrects, selectCount) {
+    const correctsArr = Array.isArray(corrects) ? corrects : [];
+    const yoursArr = Array.isArray(yours) ? yours : [];
+    const of = Math.max(Number(selectCount) || 0, correctsArr.length);
+    if (of <= 1) return null;
+    const yourSet = new Set(yoursArr.map((s) => String(s || '').trim()).filter(Boolean));
+    const correctSet = new Set(correctsArr.map((s) => String(s || '').trim()).filter(Boolean));
+    let got = 0;
+    for (const c of correctSet) if (yourSet.has(c)) got++;
+    return { got, of };
   }
 
   async function read() {
@@ -273,6 +332,14 @@
    *                                 scale — independent of the `confidence` bucket above and
    *                                 collected on either outcome dialect. Same first-tap-wins join
    *                                 rule as confidence (see Store.setConfNum / joinConfNumFromOutcome).
+   * @property {string[]} yourAnswers     every option you picked, as an array (multi-select aware) —
+   *                                 the joined `yourAnswer` string stays for back-compat, this is the
+   *                                 array it was built from (or a split-backfill of it for legacy records)
+   * @property {string[]} correctAnswers  same idea for `correctAnswer`
+   * @property {number} selectCount  how many options this question wanted picked — parsed from the stem
+   *                                 ("select two"), else correctAnswers.length, else 1
+   * @property {?{got:number,of:number}} partial  partial-credit result from Store.computePartial, or null
+   *                                 when selectCount/correctAnswers.length <= 1 (nothing "partial" to show)
    *
    * NOTE on 'memorized' as a single-value field: once a fp is flagged
    * memorized (via an Outcome or an explicit tagger save), that flag doesn't
@@ -301,6 +368,14 @@
    * @property {number} ts             epoch ms of the first detection
    * @property {number[]} attempts     every time this outcome was (re-)detected
    * @property {string} url
+   * @property {string[]} yourAnswers     every option you picked, as an array (multi-select aware) —
+   *                                 the joined `yourAnswer` string stays for back-compat, this is the
+   *                                 array it was built from (or a split-backfill of it for legacy records)
+   * @property {string[]} correctAnswers  same idea for `correctAnswer`
+   * @property {number} selectCount  how many options this question wanted picked — parsed from the stem
+   *                                 ("select two"), else correctAnswers.length, else 1
+   * @property {?{got:number,of:number}} partial  partial-credit result from Store.computePartial, or null
+   *                                 when selectCount/correctAnswers.length <= 1 (nothing "partial" to show)
    */
 
   const Store = {
@@ -329,6 +404,9 @@
     // Exposed so tests/test.html can exercise setConfNum's clamping rule
     // directly — see clampConfNum's own doc comment.
     clampConfNum,
+    // Exposed so tests/test.html can exercise the partial-credit calculation
+    // directly — see computePartial's own doc comment.
+    computePartial,
 
     /** The existing record for this question, if you've missed it before. */
     async findRepeat(question) {
@@ -403,6 +481,13 @@
           if (partial[k]) existing[k] = partial[k];
         }
         if (partial.topics && partial.topics.length) existing.topics = partial.topics;
+        // Arrays overwrite under the same only-when-non-empty rule as the
+        // joined strings above (an attempt that didn't bring new answer data
+        // shouldn't blank out what a previous attempt captured).
+        if (partial.yourAnswers && partial.yourAnswers.length) existing.yourAnswers = partial.yourAnswers;
+        if (partial.correctAnswers && partial.correctAnswers.length) existing.correctAnswers = partial.correctAnswers;
+        if (partial.selectCount) existing.selectCount = partial.selectCount;
+        existing.partial = computePartial(existing.yourAnswers, existing.correctAnswers, existing.selectCount);
         // `shaky` describes the ORIGINAL capture, not every subsequent
         // attempt — a shaky log matching an existing record just adds an
         // attempt and leaves shaky as-is. A later attempt that's NOT shaky
@@ -447,6 +532,9 @@
         question: '',
         yourAnswer: '',
         correctAnswer: '',
+        yourAnswers: [],
+        correctAnswers: [],
+        selectCount: 1,
         topics: [],
         reason: '',
         notes: '',
@@ -464,6 +552,15 @@
       // A quick-capture is only "triaged" if a reason was actually picked at
       // save time — don't let a caller-omitted flag silently mark it done.
       if (partial.triaged === undefined) miss.triaged = !!miss.reason;
+      if (!miss.selectCount) miss.selectCount = miss.correctAnswers.length || 1;
+      // NOTE: this function's own `partial` PARAMETER (the caller's patch
+      // object, e.g. `{ question, yourAnswer, ... }`) is an unrelated,
+      // coincidental name collision with the NEW `miss.partial` FIELD below
+      // ({got,of} | null) — same kind of coincidence as the 'didnt-know'
+      // reason-id / confidence-value overlap noted near LEGACY_REASON_MAP
+      // above. No actual conflict: one is a local binding, the other a
+      // property on the record.
+      miss.partial = computePartial(miss.yourAnswers, miss.correctAnswers, miss.selectCount);
       // Join confidence/confNum in from the passive-outcome log at capture
       // time, if this capture didn't already bring its own and one exists
       // for the fp.
@@ -532,7 +629,17 @@
      * adds an attempt but keeps the ORIGINAL outcome and confidence, since a
      * later view is a re-read, not a new attempt at the question.
      */
-    async logOutcome({ fp, questionSnippet, outcome, confidence = null, exam, url } = {}) {
+    async logOutcome({
+      fp,
+      questionSnippet,
+      outcome,
+      confidence = null,
+      exam,
+      url,
+      yourAnswers = [],
+      correctAnswers = [],
+      selectCount
+    } = {}) {
       if (!fp) return { record: null, deduped: false }; // never log unattributable outcomes
       const db = await read();
       const now = Date.now();
@@ -544,6 +651,7 @@
         return { record: existing, deduped: true };
       }
 
+      const resolvedSelectCount = selectCount || correctAnswers.length || 1;
       const record = {
         id: newId(),
         fp,
@@ -554,7 +662,11 @@
         exam: exam || '',
         ts: now,
         attempts: [now],
-        url: url || ''
+        url: url || '',
+        yourAnswers,
+        correctAnswers,
+        selectCount: resolvedSelectCount,
+        partial: computePartial(yourAnswers, correctAnswers, resolvedSelectCount)
       };
       db.outcomes.unshift(record);
       await write(db);

@@ -90,6 +90,23 @@
     return '';
   }
 
+  /**
+   * How many options a question wants picked. Parses "select two/three/four"
+   * (or the numeral) out of the stem; falls back to how many correct answers
+   * were actually found (a real multi-select signal even with no explicit
+   * "select N" wording); defaults to 1 (plain single-select).
+   */
+  function computeSelectCount(stem, correctAnswers) {
+    const m = String(stem || '').match(/select\s+(two|three|four|2|3|4)/i);
+    if (m) {
+      const WORD_TO_N = { two: 2, three: 3, four: 4 };
+      const raw = m[1].toLowerCase();
+      return WORD_TO_N[raw] || Number(raw);
+    }
+    const corrects = Array.isArray(correctAnswers) ? correctAnswers : [];
+    return corrects.length > 1 ? corrects.length : 1;
+  }
+
   /** First selector in the list that matches anything. */
   function pick(selectors, root = document) {
     for (const s of selectors) {
@@ -227,7 +244,7 @@
     enabled: true,
     match: (loc) => /(^|\.)udemy\.com$/i.test(loc.hostname),
     extract() {
-      const out = { question: '', yourAnswer: '', correctAnswer: '' };
+      const out = { question: '', yourAnswer: '', correctAnswer: '', yourAnswers: [], correctAnswers: [] };
 
       // Layer 1: the real hook. Layer 2: class substrings. Layer 3: badges.
       let rows = [...document.querySelectorAll('[data-purpose="answer"]')];
@@ -267,8 +284,12 @@
 
       // "Choose two" questions legitimately have several of each.
       const uniq = (a) => [...new Set(a)];
-      out.yourAnswer = uniq(yours).join(' | ');
-      out.correctAnswer = uniq(right).join(' | ');
+      const uniqYours = uniq(yours);
+      const uniqRight = uniq(right);
+      out.yourAnswer = uniqYours.join(' | ');
+      out.correctAnswer = uniqRight.join(' | ');
+      out.yourAnswers = uniqYours;
+      out.correctAnswers = uniqRight;
 
       // No prompt hook exists on this page, so read the blocks above the
       // options — same idea as the generic stem, anchored on the option list
@@ -322,7 +343,7 @@
     match: (loc) =>
       loc.hostname === 'portal.tutorialsdojo.com' || loc.hostname.endsWith('.tutorialsdojo.com'),
     extract() {
-      const out = { question: '', yourAnswer: '', correctAnswer: '' };
+      const out = { question: '', yourAnswer: '', correctAnswer: '', yourAnswers: [], correctAnswers: [] };
       const block = tdVisibleBlock();
       if (!block) return out;
 
@@ -350,9 +371,11 @@
       // Multi-select ("Select TWO") questions legitimately have several of
       // each; single-select questions just get one-element arrays.
       out.yourAnswer = yours.join(' | ');
+      out.yourAnswers = yours;
       // Stays '' until the review UI actually marks a correct <li> — never
       // guessed at from elsewhere on the page.
       out.correctAnswer = right.join(' | ');
+      out.correctAnswers = right;
 
       return out;
     }
@@ -386,7 +409,7 @@
     enabled: true,
     match: () => true,
     extract() {
-      const result = { question: '', yourAnswer: '', correctAnswer: '' };
+      const result = { question: '', yourAnswer: '', correctAnswer: '', yourAnswers: [], correctAnswers: [] };
 
       // 1. An explicit text selection always wins — you highlighted it on purpose.
       const sel = clean(window.getSelection ? String(window.getSelection()) : '');
@@ -404,6 +427,7 @@
             .slice(0, 4)
             .map(text);
       result.yourAnswer = yourEls.filter(Boolean).slice(0, 4).join(' | ');
+      result.yourAnswers = yourEls.filter(Boolean).slice(0, 4);
 
       // 3. Correct answer: common markup conventions, then a text pattern.
       const correctEls = [
@@ -416,11 +440,15 @@
         .filter((t) => t && t.length < 400);
       if (correctEls.length) {
         result.correctAnswer = correctEls.slice(0, 4).join(' | ');
+        result.correctAnswers = correctEls.slice(0, 4);
       } else {
         const m = document.body.innerText.match(
           /correct answer(?:\s*is)?\s*[:\-–]\s*([^\n]{2,300})/i
         );
-        if (m) result.correctAnswer = clean(m[1]);
+        if (m) {
+          result.correctAnswer = clean(m[1]);
+          result.correctAnswers = [result.correctAnswer];
+        }
       }
 
       // 4. Question: the text immediately preceding the option list.
@@ -491,6 +519,7 @@
   root.CertBuddyAdapters = {
     detectExam,
     detectDiscriminator,
+    computeSelectCount,
     truncate,
     inNav, // exported so outcomes.js can reuse the same nav/sidebar/footer check
     adapters: ADAPTERS, // exposed so you can test one from the console
@@ -515,11 +544,14 @@
           ? {}
           : safe(() => genericAdapter.extract(), {}) || {};
 
-      const merged = { question: '', yourAnswer: '', correctAnswer: '' };
+      const merged = { question: '', yourAnswer: '', correctAnswer: '', yourAnswers: [], correctAnswers: [] };
       const usedFallback = [];
       for (const k of Object.keys(merged)) {
-        if (data[k]) merged[k] = data[k];
-        else if (fallback[k]) {
+        const isArr = Array.isArray(merged[k]);
+        const dataHas = isArr ? Array.isArray(data[k]) && data[k].length : !!data[k];
+        const fallbackHas = isArr ? Array.isArray(fallback[k]) && fallback[k].length : !!fallback[k];
+        if (dataHas) merged[k] = data[k];
+        else if (fallbackHas) {
           merged[k] = fallback[k];
           usedFallback.push(k);
         }
@@ -545,7 +577,8 @@
           adapter.name +
           (selected ? ' +selection(question)' : '') +
           (usedFallback.length ? ` +generic(${usedFallback.join(',')})` : ''),
-        exam: detectExam(document.title + ' ' + document.body.innerText.slice(0, 4000))
+        exam: detectExam(document.title + ' ' + document.body.innerText.slice(0, 4000)),
+        selectCount: computeSelectCount(merged.question, merged.correctAnswers)
       };
     }
   };

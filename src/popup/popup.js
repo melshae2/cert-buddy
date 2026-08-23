@@ -629,6 +629,8 @@
             !m.triaged ? '<span class="dot-untriaged">•</span>' : ''
           }${m.shaky ? '<span class="guessed-pill">guessed</span> ' : ''}${
             m.confidence === 'memorized' ? '<span class="memorized-pill">memorized</span> ' : ''
+          }${
+            m.partial ? `<span class="partial-pill${m.partial.got === m.partial.of ? ' full' : ''}">${m.partial.got}/${m.partial.of}</span> ` : ''
           }${esc(truncate(m.question, 70))}</span>
           ${m.notes ? `<div class="debrief-note">“${esc(truncate(m.notes, 90))}”</div>` : ''}
           <div class="debrief-actions">
@@ -827,6 +829,8 @@
       n > 1 ? `<span class="repeat-pill">missed ${n}×</span> · ` : ''
     }${m.shaky ? `<span class="guessed-pill">guessed</span> · ` : ''}${
       m.confidence === 'memorized' ? `<span class="memorized-pill">memorized</span> · ` : ''
+    }${
+      m.partial ? `<span class="partial-pill${m.partial.got === m.partial.of ? ' full' : ''}">${m.partial.got}/${m.partial.of}</span> · ` : ''
     }${fmtDate(m.ts)}</span>
       </div>
       <div class="q clamp">${esc(m.question) || '<i>no question text</i>'}</div>

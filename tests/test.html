@@ -30,7 +30,7 @@
 <body>
 <h1>cert-buddy — pure-function test harness</h1>
 <p class="hint">
-  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=161, taxonomy.js and
+  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=1620, taxonomy.js and
   adapters.js directly. No seed data, no mock storage — every expected value below is
   either a literal computed from reading the source (migrateReason's table, detectWeighted's
   scoring/cap rules, sessionize's gap math, focusTopics' decay formula) or a deliberate
@@ -41,14 +41,14 @@
 
 <!-- Tiny inline chrome stub. The pure functions under test never touch
      storage — this exists only so nothing throws if that assumption is ever
-     wrong; store.js?v=161's read()/write()/clearAll() (which DO use chrome.storage)
+     wrong; store.js?v=1620's read()/write()/clearAll() (which DO use chrome.storage)
      are never called by this harness. -->
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js?v=161"></script>
-<script src="../src/lib/taxonomy.js?v=160"></script>
-<script src="../src/content/adapters.js?v=160"></script>
+<script src="../src/lib/store.js?v=1620"></script>
+<script src="../src/lib/taxonomy.js?v=1610"></script>
+<script src="../src/content/adapters.js?v=1611"></script>
 <script>
 (function () {
   const results = [];
@@ -396,6 +396,90 @@
     );
     assertEqual(Adapters.detectExam('General trivia quiz about world capitals and geography.'), '',
       'detectExam: no code, no course-name match -> \'\'');
+  }
+
+  // =====================================================================
+  group('computeSelectCount (adapters.js)');
+  // =====================================================================
+  {
+    assertEqual(Adapters.computeSelectCount('Select TWO of the following options.', []), 2,
+      "computeSelectCount: 'Select TWO' in the stem -> 2");
+    assertEqual(Adapters.computeSelectCount('Select three actions the architect should take.', []), 3,
+      "computeSelectCount: 'Select three' in the stem -> 3");
+    assertEqual(Adapters.computeSelectCount('(Select 2) Which options apply?', []), 2,
+      "computeSelectCount: '(Select 2)' numeral form in the stem -> 2");
+    assertEqual(Adapters.computeSelectCount('Which options apply?', ['A', 'B', 'C']), 3,
+      'computeSelectCount: no "select N" phrase, falls back to correctAnswers.length (3)');
+    assertEqual(Adapters.computeSelectCount('Which option applies?', ['A']), 1,
+      'computeSelectCount: no phrase, single correct answer -> 1');
+    assertEqual(Adapters.computeSelectCount('Which option applies?', []), 1,
+      'computeSelectCount: no phrase, no correct answers at all -> 1 (default)');
+  }
+
+  // =====================================================================
+  group('multi-select array backfill via normalizeMiss (store.js?v=162)');
+  // =====================================================================
+  {
+    const baseMiss = {
+      id: 'msa1',
+      ts: 1700000000000,
+      question: 'A sufficiently long dummy question text for fingerprinting purposes, part two.',
+      reason: '',
+      attempts: [1700000000000]
+    };
+    const joined = Store.normalizeMiss({ ...baseMiss, yourAnswer: 'A | B', correctAnswer: 'A | C' });
+    assertEqual(JSON.stringify(joined.yourAnswers), JSON.stringify(['A', 'B']),
+      "normalizeMiss: legacy joined yourAnswer 'A | B' backfills to ['A','B']");
+    assertEqual(JSON.stringify(joined.correctAnswers), JSON.stringify(['A', 'C']),
+      "normalizeMiss: legacy joined correctAnswer 'A | C' backfills to ['A','C']");
+    assertEqual(joined.selectCount, 2, 'normalizeMiss: backfilled selectCount = correctAnswers.length (2)');
+
+    const single = Store.normalizeMiss({ ...baseMiss, yourAnswer: 'B', correctAnswer: 'B' });
+    assertEqual(JSON.stringify(single.yourAnswers), JSON.stringify(['B']),
+      "normalizeMiss: no-delimiter yourAnswer 'B' backfills to one-element ['B']");
+    assertEqual(JSON.stringify(single.correctAnswers), JSON.stringify(['B']),
+      "normalizeMiss: no-delimiter correctAnswer 'B' backfills to one-element ['B']");
+    assertEqual(single.selectCount, 1, 'normalizeMiss: single-answer backfilled selectCount = 1');
+    assertEqual(single.partial, null, 'normalizeMiss: single-answer backfill -> partial is null (of <= 1)');
+
+    const empty = Store.normalizeMiss({ ...baseMiss, yourAnswer: '', correctAnswer: '' });
+    assertEqual(JSON.stringify(empty.yourAnswers), JSON.stringify([]),
+      "normalizeMiss: empty yourAnswer '' backfills to []");
+    assertEqual(JSON.stringify(empty.correctAnswers), JSON.stringify([]),
+      "normalizeMiss: empty correctAnswer '' backfills to []");
+
+    // A record that ALREADY has array fields must NOT be re-derived from the
+    // (possibly hand-edited, now-disagreeing) joined strings — arrays win as-is.
+    const preserved = Store.normalizeMiss({
+      ...baseMiss,
+      yourAnswer: 'X | Y | Z', // edited after capture, now disagrees with the arrays below
+      correctAnswer: 'X | Y',
+      yourAnswers: ['A'],
+      correctAnswers: ['A', 'B'],
+      selectCount: 2
+    });
+    assertEqual(JSON.stringify(preserved.yourAnswers), JSON.stringify(['A']),
+      'normalizeMiss: existing yourAnswers array is preserved, NOT re-split from an edited joined string');
+    assertEqual(JSON.stringify(preserved.correctAnswers), JSON.stringify(['A', 'B']),
+      'normalizeMiss: existing correctAnswers array is preserved, NOT re-split from an edited joined string');
+  }
+
+  // =====================================================================
+  group('computePartial (store.js?v=162)');
+  // =====================================================================
+  {
+    assertEqual(JSON.stringify(Store.computePartial(['A', 'B'], ['A', 'B'], 2)), JSON.stringify({ got: 2, of: 2 }),
+      'computePartial: full match -> {got:2, of:2}');
+    assertEqual(JSON.stringify(Store.computePartial(['A'], ['A', 'B'], 2)), JSON.stringify({ got: 1, of: 2 }),
+      'computePartial: one of two correct -> {got:1, of:2}');
+    assertEqual(JSON.stringify(Store.computePartial(['C', 'D'], ['A', 'B'], 2)), JSON.stringify({ got: 0, of: 2 }),
+      'computePartial: zero intersection -> {got:0, of:2}');
+    assertEqual(Store.computePartial(['A'], ['A'], 1), null,
+      'computePartial: single-select (selectCount 1, one correct answer) -> null, nothing partial to show');
+    assertEqual(Store.computePartial(['A'], ['A'], 0), null,
+      'computePartial: selectCount 0 with one correct answer -> of=max(0,1)=1 -> null');
+    assertEqual(JSON.stringify(Store.computePartial([' A ', 'B '], ['A', ' B'], 2)), JSON.stringify({ got: 2, of: 2 }),
+      'computePartial: whitespace around answers is trimmed before comparing -> {got:2, of:2}');
   }
 
   // ---- render ------------------------------------------------------------

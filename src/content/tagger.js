@@ -319,6 +319,11 @@
   let suggItems = [];
   let currentDisc = ''; // the discriminator chip's current value, auto or corrected
   let mode = 'compact'; // 'compact' | 'full' — which layout is showing
+  // The Adapters.extract() snapshot from the most recent open() — save()
+  // reads yourAnswers/correctAnswers/selectCount from here rather than
+  // re-deriving them from the (freely hand-editable) yourAnswer/
+  // correctAnswer textareas. See save()'s own comment for why.
+  let lastExtraction = null;
 
   const truncate = (s, n) => {
     s = String(s || '');
@@ -427,6 +432,7 @@
   function open() {
     setMode('compact');
     const data = Adapters.extract();
+    lastExtraction = data;
     $('question').value = data.question || '';
     $('yourAnswer').value = data.yourAnswer || '';
     $('correctAnswer').value = data.correctAnswer || '';
@@ -590,6 +596,17 @@
         question: Adapters.truncate(question),
         yourAnswer,
         correctAnswer: $('correctAnswer').value.trim(),
+        // Multi-select arrays/selectCount come from the extraction snapshot
+        // taken when the panel opened (`lastExtraction`), NOT re-derived from
+        // the `yourAnswer`/`correctAnswer` values above — those textareas are
+        // freely hand-editable, and re-splitting an edited joined string here
+        // could silently disagree with what the page actually showed.
+        // Accepted gap: hand-editing the joined string does NOT refresh these
+        // arrays; they only refresh on the next capture (a fresh
+        // Adapters.extract() call via open()).
+        yourAnswers: (lastExtraction && lastExtraction.yourAnswers) || [],
+        correctAnswers: (lastExtraction && lastExtraction.correctAnswers) || [],
+        selectCount: (lastExtraction && lastExtraction.selectCount) || 1,
         topics: [...topics],
         reason,
         notes: $('notes').value.trim(),
