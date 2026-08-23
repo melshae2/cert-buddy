@@ -30,7 +30,7 @@
 <body>
 <h1>cert-buddy — pure-function test harness</h1>
 <p class="hint">
-  Exercises the pure (no chrome.storage, no DOM) functions in store.js, taxonomy.js and
+  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=161, taxonomy.js and
   adapters.js directly. No seed data, no mock storage — every expected value below is
   either a literal computed from reading the source (migrateReason's table, detectWeighted's
   scoring/cap rules, sessionize's gap math, focusTopics' decay formula) or a deliberate
@@ -41,14 +41,14 @@
 
 <!-- Tiny inline chrome stub. The pure functions under test never touch
      storage — this exists only so nothing throws if that assumption is ever
-     wrong; store.js's read()/write()/clearAll() (which DO use chrome.storage)
+     wrong; store.js?v=161's read()/write()/clearAll() (which DO use chrome.storage)
      are never called by this harness. -->
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js?v=150"></script>
-<script src="../src/lib/taxonomy.js?v=150"></script>
-<script src="../src/content/adapters.js?v=150"></script>
+<script src="../src/lib/store.js?v=161"></script>
+<script src="../src/lib/taxonomy.js?v=160"></script>
+<script src="../src/content/adapters.js?v=160"></script>
 <script>
 (function () {
   const results = [];
@@ -78,7 +78,7 @@
   const Adapters = window.CertBuddyAdapters;
 
   // =====================================================================
-  group('fingerprint (store.js)');
+  group('fingerprint (store.js?v=161)');
   // =====================================================================
   {
     const quickFox = 'The quick brown fox jumps over the lazy dog while studying for the exam diligently.';
@@ -119,11 +119,11 @@
   }
 
   // =====================================================================
-  group('migrateReason (store.js)');
+  group('migrateReason (store.js?v=161)');
   // =====================================================================
   {
     // All 7 legacy ids from the pre-taxonomy-v2 7-bucket reason model,
-    // mapped per store.js's LEGACY_REASON_MAP.
+    // mapped per store.js?v=161's LEGACY_REASON_MAP.
     const legacy = {
       'didnt-know': 'never-learned',
       'confused-two': 'never-learned',
@@ -149,7 +149,7 @@
   }
 
   // =====================================================================
-  group("confidence migration: 'unsure' -> 'narrowed' (store.js)");
+  group("confidence migration: 'unsure' -> 'narrowed' (store.js?v=161)");
   // =====================================================================
   {
     // Minimal-but-valid fixtures — normalizeMiss reads m.ts (attempts
@@ -172,6 +172,13 @@
       "normalizeMiss: current confidence id 'memorized' passes through unchanged");
     assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: null }).confidence, null,
       'normalizeMiss: null confidence (never rated) stays null, not migrated to anything');
+    // 'intuition' (correct-only) and 'didnt-know' (wrong-only) are new
+    // enum values, never spelled anything else — plain passthrough, no
+    // migration table entry needed for either.
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'intuition' }).confidence, 'intuition',
+      "normalizeMiss: new confidence id 'intuition' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'didnt-know' }).confidence, 'didnt-know',
+      "normalizeMiss: new confidence id 'didnt-know' passes through unchanged");
 
     const baseOutcome = { id: 'migo1', fp: 'fpmigrationtest', outcome: 'correct', ts: 1700000000000, attempts: [1700000000000] };
     assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'unsure' }).confidence, 'narrowed',
@@ -180,10 +187,57 @@
       "normalizeOutcome: current confidence id 'guessed' passes through unchanged");
     assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: null }).confidence, null,
       'normalizeOutcome: null confidence stays null, not migrated to anything');
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'intuition' }).confidence, 'intuition',
+      "normalizeOutcome: new confidence id 'intuition' passes through unchanged");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'didnt-know' }).confidence, 'didnt-know',
+      "normalizeOutcome: new confidence id 'didnt-know' passes through unchanged");
   }
 
   // =====================================================================
-  group('sessionize (store.js)');
+  group('confNum (store.js?v=161)');
+  // =====================================================================
+  {
+    const baseMiss = {
+      id: 'confm1',
+      ts: 1700000000000,
+      question: 'Another sufficiently long dummy question text for fingerprinting here.',
+      reason: '',
+      attempts: [1700000000000]
+    };
+    const baseOutcome = { id: 'confo1', fp: 'fpconfnumtest', outcome: 'correct', ts: 1700000000000, attempts: [1700000000000] };
+
+    // --- presence backfill: an older record predating the field entirely ---
+    assertEqual(Store.normalizeMiss({ ...baseMiss }).confNum, null,
+      'normalizeMiss: a record with no confNum field at all backfills to null');
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome }).confNum, null,
+      'normalizeOutcome: a record with no confNum field at all backfills to null');
+
+    // --- passthrough: an existing value is left alone ---
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confNum: 7 }).confNum, 7,
+      'normalizeMiss: an existing confNum value passes through unchanged');
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confNum: 3 }).confNum, 3,
+      'normalizeOutcome: an existing confNum value passes through unchanged');
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confNum: null }).confNum, null,
+      'normalizeMiss: an explicit null confNum stays null');
+
+    // --- clampConfNum: the pure rule setConfNum uses to sanitize input ---
+    assertEqual(Store.clampConfNum(7), 7, 'clampConfNum: an in-range integer passes through unchanged');
+    assertEqual(Store.clampConfNum(1), 1, 'clampConfNum: the low boundary (1) passes through unchanged');
+    assertEqual(Store.clampConfNum(10), 10, 'clampConfNum: the high boundary (10) passes through unchanged');
+    assertEqual(Store.clampConfNum(0), 1, 'clampConfNum: below range (0) clamps up to 1');
+    assertEqual(Store.clampConfNum(-5), 1, 'clampConfNum: negative input clamps up to 1');
+    assertEqual(Store.clampConfNum(11), 10, 'clampConfNum: above range (11) clamps down to 10');
+    assertEqual(Store.clampConfNum(999), 10, 'clampConfNum: far above range clamps down to 10');
+    assertEqual(Store.clampConfNum(7.4), 7, 'clampConfNum: 7.4 rounds down to 7');
+    assertEqual(Store.clampConfNum(7.6), 8, 'clampConfNum: 7.6 rounds up to 8');
+    assertEqual(Store.clampConfNum('abc'), null, "clampConfNum: non-numeric string ('abc') -> null, never garbage");
+    assertEqual(Store.clampConfNum(null), null, 'clampConfNum: null input -> null');
+    assertEqual(Store.clampConfNum(undefined), null, 'clampConfNum: undefined input -> null');
+    assertEqual(Store.clampConfNum(NaN), null, 'clampConfNum: NaN input -> null');
+  }
+
+  // =====================================================================
+  group('sessionize (store.js?v=161)');
   // =====================================================================
   {
     const GAP_MS = 90 * 60 * 1000;
@@ -228,7 +282,7 @@
   }
 
   // =====================================================================
-  group('focusTopics (store.js)');
+  group('focusTopics (store.js?v=161)');
   // =====================================================================
   {
     const NOW = 2000000000000;

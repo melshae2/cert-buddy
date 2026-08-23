@@ -342,19 +342,31 @@
   // still on disk with the literal 'unsure' are migrated to 'narrowed' on
   // every read (see store.js's normalizeMiss/normalizeOutcome), so nothing
   // downstream of Store.getAll() ever sees the old value.
-  const CONFIDENCE_ORDER = ['knew', 'narrowed', 'guessed', 'memorized'];
+  // 'intuition' (correct-only) and 'didnt-know' (wrong-only) are the two
+  // newest picks — see the toast's CORRECT_DIALECT/WRONG_DIALECT in
+  // outcomes.js. Both pass through Store.getAll() with no migration (they
+  // were never spelled anything else), so they need no special handling
+  // here beyond being listed like every other level.
+  const CONFIDENCE_ORDER = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know'];
   const CONFIDENCE_LABELS = {
     knew: 'Knew it',
-    narrowed: 'Narrowed',
+    narrowed: 'Between two',
     guessed: 'Guessed',
-    memorized: 'Memorized'
+    memorized: 'Memorized',
+    intuition: 'Intuition',
+    'didnt-know': "Didn't know"
   };
   // Anchor accuracy each confidence level SHOULD land near — used only to
   // pick which level's actual accuracy is furthest off for the one-line
   // takeaway, never drawn on the chart itself. knew/memorized are near-
   // certain claims, so ~95%+ is the bar the spec itself names; narrowed is
-  // partial knowledge; guessed is close to chance on 4-option MC.
-  const CONFIDENCE_EXPECTED = { knew: 95, memorized: 95, narrowed: 60, guessed: 30 };
+  // partial knowledge; guessed is close to chance on 4-option MC. intuition
+  // is a genuine-competence claim like knew/memorized, just recognition-
+  // primed rather than reasoned, so it gets its own (slightly lower) bar
+  // rather than sharing knew/memorized's 95. didnt-know is wrong-only by
+  // construction (see outcomes.js) — its actual accuracy will always read
+  // 0%, same band as guessed's near-chance expectation.
+  const CONFIDENCE_EXPECTED = { knew: 95, memorized: 95, narrowed: 60, guessed: 30, intuition: 85, 'didnt-know': 25 };
 
   const insightEmptyHtml = () => `<div class="empty">not enough data yet — keep logging</div>`;
   const insightCardShell = (title, bodyHtml) =>

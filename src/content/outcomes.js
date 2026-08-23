@@ -6,12 +6,29 @@
  * the outcome against the on-screen question — no click, no tagger panel.
  *
  * Also owns the two-stage confidence toast (Feature 2): the moment a *new*
- * outcome is logged, a tiny non-blocking toast offers "knew it / between 2
- * (narrowed) / guessed / memorized" so weak-area weighting can tell a lucky
- * guess (or a pure answer-recognition right on a repeat question) from a
- * solid, reasoned one. A confidence tap morphs the SAME toast into a stage 2
- * one-line "why" prompt — that sentence is the primary capture this feature
- * exists to collect, not the manual tagger panel.
+ * outcome is logged, a tiny non-blocking toast offers a confidence pick.
+ * The toast speaks a different DIALECT per outcome — different buttons, in
+ * a different order, under different digit keys — because "knew it" reads
+ * absurd on a wrong answer and "memorized"/"intuition" are impossible there
+ * (you can't recognize the right answer and still pick the wrong one):
+ *   - CORRECT: memorized(1) / knew it(2) / intuition(3) / between two(4) /
+ *     guessed(5). 'memorized' = pure answer-recognition, zero reasoning;
+ *     'intuition' = genuine recognition-primed competence — NOT discounted
+ *     the way 'memorized' is (see focusTopics/isStubborn in store.js).
+ *   - WRONG: was sure(1) / between two(2) / guessed(3) / didn't know(4).
+ *     'didnt-know' auto-classifies the auto-captured miss as never-learned
+ *     (see chooseConfidence -> Store.setNeverLearnedByFp).
+ * Since the SAME key can mean different things on different dialects (key 4
+ * is 'between two' on one side, 'didnt-know' on the other), there's no
+ * static key->value table — each button's meaning/order/key is assigned
+ * per-dialect in applyDialect(), and keydown resolves against whichever
+ * VISIBLE button currently claims that key.
+ *
+ * A confidence tap morphs the SAME toast into a stage 2 one-line "why"
+ * prompt, PLUS a 1-10 numeric confidence scale (same dialect-agnostic
+ * scale on both outcomes) — the sentence is the primary capture this
+ * feature exists to collect, the scale is a lower-friction number-only
+ * fallback, not the manual tagger panel.
  *
  * Feature 3 (auto-capture): an INCORRECT outcome automatically creates/merges
  * a miss record from the same extraction used for the outcome, so the record
@@ -315,11 +332,15 @@
     @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
     .toast[hidden] { display: none; }
 
-    /* Stage 1 (confidence buttons) and stage 2 (the "why" prompt) are two
-       children of the same .toast — only one is ever unhidden, so the toast
-       morphs in place instead of dismissing and re-entering. */
-    .stage1, .stage2 { display: flex; align-items: center; gap: 10px; }
+    /* Stage 1 (confidence buttons) and stage 2 (the "why" prompt + scale)
+       are two children of the same .toast — only one is ever unhidden, so
+       the toast morphs in place instead of dismissing and re-entering.
+       Stage 1 stays a single row; stage 2 stacks the scale ABOVE its own
+       input/save/skip row, so it's a column instead. */
+    .stage1 { display: flex; align-items: center; gap: 10px; }
+    .stage2 { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
     .stage1[hidden], .stage2[hidden] { display: none; }
+    .stage2-row { display: flex; align-items: center; gap: 10px; }
 
     .label {
       font-family: var(--mono); font-size: 12.5px; color: var(--toast-fg);
@@ -347,6 +368,31 @@
     .btn.flash { background: var(--toast-accent); border-color: var(--toast-accent); color: var(--toast-accent-ink); }
     .btn.flash .k { opacity: .85; }
 
+    /* Stage-2 numeric scale — renders on BOTH outcome dialects, above the
+       why-input. tabindex=-1 on .scale lets showStage2() focus the
+       container itself (not a specific button) so bare digit keys drive
+       selection before the user ever touches the input. */
+    .scale-label {
+      font-family: var(--mono); font-size: 10.5px; color: var(--toast-muted);
+      letter-spacing: .02em; margin-bottom: 4px;
+    }
+    .scale { display: flex; gap: 4px; outline: none; }
+    .scale-btn {
+      font-family: var(--mono); font-size: 12px; font-weight: 600;
+      width: 24px; height: 24px; padding: 0; line-height: 1;
+      border-radius: 6px; border: 1px solid color-mix(in srgb, var(--toast-accent) 45%, transparent);
+      background: transparent; color: var(--toast-fg); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .12s, border-color .12s, color .12s;
+    }
+    .scale-btn:hover { background: var(--toast-accent); border-color: var(--toast-accent); color: var(--toast-accent-ink); }
+    .scale-btn:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
+    .scale-btn.selected { background: var(--toast-accent); border-color: var(--toast-accent); color: var(--toast-accent-ink); }
+    .scale-hint {
+      font-family: var(--mono); font-size: 10.5px; color: var(--toast-muted);
+      letter-spacing: .01em; margin-top: 4px;
+    }
+
     .stage2-input {
       font-family: var(--mono); font-size: 13px; min-width: 220px;
       background: transparent; color: var(--toast-fg);
@@ -363,8 +409,31 @@
     .details-link:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
   `;
 
-  const CONFIDENCE_KEYS = { '1': 'knew', '2': 'narrowed', '3': 'guessed', '4': 'memorized' };
-  const CONFIDENCE_VALUES = new Set(['knew', 'narrowed', 'guessed', 'memorized']);
+  const ALL_CONFIDENCE_VALS = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know'];
+  const CONFIDENCE_VALUES = new Set(ALL_CONFIDENCE_VALS);
+
+  // Per-dialect button config: order in the array IS the visual left-to-
+  // right order (applied via style.order), `key` is the digit that selects
+  // it while stage 1 is open. Replaces a static key->value table (see the
+  // file-header comment) since the correct dialect's own key mapping was
+  // reshuffled independently of the wrong dialect's, and key 4 means a
+  // different value on each side.
+  const CORRECT_DIALECT = [
+    { val: 'memorized', key: '1', label: 'memorized' },
+    { val: 'knew', key: '2', label: 'knew it' },
+    { val: 'intuition', key: '3', label: 'intuition' },
+    { val: 'narrowed', key: '4', label: 'between two' },
+    { val: 'guessed', key: '5', label: 'guessed' }
+  ];
+  const WRONG_DIALECT = [
+    { val: 'knew', key: '1', label: 'was sure' },
+    { val: 'narrowed', key: '2', label: 'between two' },
+    { val: 'guessed', key: '3', label: 'guessed' },
+    { val: 'didnt-know', key: '4', label: "didn't know" }
+  ];
+
+  // Stage-2 numeric scale: digit keys 1-9 map to themselves, 0 maps to 10.
+  const SCALE_KEYS = { '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '0': 10 };
 
   let toastShadow = null;
   let toastEl = null;
@@ -373,7 +442,8 @@
   let toastOutcome = null; // 'correct' | 'incorrect' — which outcome spawned the current toast
   let toastData = null; // the Adapters.extract() snapshot that produced toastFp
   let toastConfidence = null; // the stage-1 choice, once made
-  let toastStage = 1; // 1 (confidence buttons) | 2 (the "why" prompt)
+  let toastConfNum = null; // the stage-2 scale choice (1-10), once made
+  let toastStage = 1; // 1 (confidence buttons) | 2 (the "why" prompt + scale)
 
   function buildToastHost() {
     const host = document.createElement('div');
@@ -388,21 +458,41 @@
       <div class="toast" id="toast" hidden role="status" aria-live="polite">
         <div class="stage1" id="stage1">
           <span class="label">How confident?<span class="seen" id="toastSeen" hidden> · seen before</span></span>
-          <div class="btns">
-            <button type="button" class="btn" data-val="knew"><span id="knewLabel">knew it</span><span class="k">1</span></button>
-            <button type="button" class="btn" data-val="narrowed">between 2<span class="k">2</span></button>
-            <button type="button" class="btn" data-val="guessed">guessed<span class="k">3</span></button>
-            <button type="button" class="btn" data-val="memorized">memorized<span class="k">4</span></button>
+          <div class="btns" id="stage1Btns">
+            <button type="button" class="btn" data-val="knew"><span class="lbl">knew it</span><span class="k">1</span></button>
+            <button type="button" class="btn" data-val="narrowed"><span class="lbl">between two</span><span class="k">2</span></button>
+            <button type="button" class="btn" data-val="guessed"><span class="lbl">guessed</span><span class="k">3</span></button>
+            <button type="button" class="btn" data-val="memorized"><span class="lbl">memorized</span><span class="k">4</span></button>
+            <button type="button" class="btn" data-val="intuition"><span class="lbl">intuition</span><span class="k">5</span></button>
+            <button type="button" class="btn" data-val="didnt-know"><span class="lbl">didn't know</span><span class="k">4</span></button>
           </div>
         </div>
         <div class="stage2" id="stage2" hidden>
-          <input type="text" id="stage2Input" class="stage2-input" autocomplete="off" spellcheck="false"
-                 placeholder="why? didn't know… / not sure about…">
-          <div class="btns">
-            <button type="button" class="btn" id="stage2Save">save</button>
-            <button type="button" class="btn" id="stage2Skip">skip</button>
+          <div class="scale-wrap" id="scaleWrap">
+            <div class="scale-label">how sure? (1–10)</div>
+            <div class="scale" id="scale" tabindex="-1">
+              <button type="button" class="scale-btn" data-n="1">1</button>
+              <button type="button" class="scale-btn" data-n="2">2</button>
+              <button type="button" class="scale-btn" data-n="3">3</button>
+              <button type="button" class="scale-btn" data-n="4">4</button>
+              <button type="button" class="scale-btn" data-n="5">5</button>
+              <button type="button" class="scale-btn" data-n="6">6</button>
+              <button type="button" class="scale-btn" data-n="7">7</button>
+              <button type="button" class="scale-btn" data-n="8">8</button>
+              <button type="button" class="scale-btn" data-n="9">9</button>
+              <button type="button" class="scale-btn" data-n="10">10</button>
+            </div>
+            <div class="scale-hint">1 = no idea · 10 = for sure</div>
           </div>
-          <button type="button" class="details-link" id="stage2Details">details</button>
+          <div class="stage2-row">
+            <input type="text" id="stage2Input" class="stage2-input" autocomplete="off" spellcheck="false"
+                   placeholder="why? didn't know… / not sure about…">
+            <div class="btns">
+              <button type="button" class="btn" id="stage2Save">save</button>
+              <button type="button" class="btn" id="stage2Skip">skip</button>
+            </div>
+            <button type="button" class="details-link" id="stage2Details">details</button>
+          </div>
         </div>
       </div>`;
     shadow.appendChild(wrap);
@@ -419,6 +509,13 @@
       btn.addEventListener('click', () => chooseConfidence(btn.dataset.val));
     }
 
+    // Clicking a scale button works regardless of what currently has focus
+    // (unlike the digit-key path below, which is gated off once the
+    // why-input is focused) — see selectConfNum's own doc comment.
+    for (const btn of shadow.querySelectorAll('.scale-btn')) {
+      btn.addEventListener('click', () => selectConfNum(Number(btn.dataset.n)));
+    }
+
     shadow.getElementById('stage2Save').addEventListener('click', stage2Save);
     shadow.getElementById('stage2Skip').addEventListener('click', stage2Skip);
     // Loose coupling by design: outcomes.js and tagger.js are two independent
@@ -431,9 +528,13 @@
 
     const stage2Input = shadow.getElementById('stage2Input');
     stage2Input.addEventListener('keydown', (e) => {
-      // Stop here (never let this reach the page or the 1-4 window listener
-      // below) — this field IS the point at which 1/2/3/4 must become plain
-      // digits again, not toast shortcuts.
+      // Stop here (never let this reach the page) — this field IS the point
+      // at which digits must become plain text again, not toast/scale
+      // shortcuts. The window listener below doesn't actually depend on
+      // this stopPropagation (it runs in the capture phase, before this
+      // handler); isTypingTarget() there is the real guard. This call stays
+      // for defense in depth against anything else on the page listening
+      // for keydown in the bubble phase.
       e.stopPropagation();
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -479,32 +580,59 @@
     return toastShadow;
   }
 
+  /**
+   * Applies one dialect config (CORRECT_DIALECT or WRONG_DIALECT, see their
+   * definitions above) to the stage-1 button row: every button whose value
+   * isn't in this dialect gets hidden (and stripped of data-key, so the
+   * keydown resolver below can never match it — the hidden-button guard
+   * falls out for free instead of needing a separate check). Every button
+   * that IS in this dialect gets shown, repositioned (style.order, so the
+   * DOM's own child order doesn't need to change), relabeled, and rekeyed.
+   */
+  function applyDialect(dialect) {
+    const shownVals = new Set(dialect.map((d) => d.val));
+    for (const val of ALL_CONFIDENCE_VALS) {
+      const btn = toastShadow.querySelector(`.stage1 .btn[data-val="${val}"]`);
+      if (btn && !shownVals.has(val)) {
+        btn.hidden = true;
+        delete btn.dataset.key;
+      }
+    }
+    dialect.forEach((entry, i) => {
+      const btn = toastShadow.querySelector(`.stage1 .btn[data-val="${entry.val}"]`);
+      if (!btn) return;
+      btn.hidden = false;
+      btn.style.order = i;
+      btn.dataset.key = entry.key;
+      btn.querySelector('.lbl').textContent = entry.label;
+      btn.querySelector('.k').textContent = entry.key;
+    });
+  }
+
   function showToast(fp, outcome, data) {
     ensureToast();
     toastFp = fp;
     toastOutcome = outcome;
     toastData = data;
     toastConfidence = null;
+    toastConfNum = null;
     toastStage = 1;
 
     // Always (re-)enter on stage 1, buttons unflashed — a toast for a new
-    // question reuses this same host/shadow, so a stage-2/flash state left
-    // over from the PREVIOUS question must not bleed into this one.
+    // question reuses this same host/shadow, so a stage-2/flash/scale-
+    // selection state left over from the PREVIOUS question must not bleed
+    // into this one.
     const stage1El = toastShadow.getElementById('stage1');
     const stage2El = toastShadow.getElementById('stage2');
     stage1El.hidden = false;
     stage2El.hidden = true;
     for (const b of toastShadow.querySelectorAll('.stage1 .btn')) b.classList.remove('flash');
+    for (const b of toastShadow.querySelectorAll('.scale-btn')) b.classList.remove('selected');
 
-    // The toast speaks a different dialect per outcome. On a WRONG answer,
-    // "knew it" reads absurd and "memorized" is impossible (you can't have
-    // memorized the right answer and picked the wrong one) — so the knew
-    // button relabels to "was sure" (same 'knew' id: confident-but-wrong is
-    // the misconception signal the calibration chart keys on) and memorized
-    // hides, its key going inert via the same hidden check.
-    const wrong = outcome === 'incorrect';
-    toastShadow.getElementById('knewLabel').textContent = wrong ? 'was sure' : 'knew it';
-    toastShadow.querySelector('.stage1 .btn[data-val="memorized"]').hidden = wrong;
+    // The toast speaks a different dialect per outcome — see applyDialect
+    // and the CORRECT_DIALECT/WRONG_DIALECT configs above for exactly which
+    // buttons, in what order, under which key.
+    applyDialect(outcome === 'incorrect' ? WRONG_DIALECT : CORRECT_DIALECT);
 
     // Change-blindness fix: the banner's own render masks a simultaneous
     // onset, so the toast enters ~400ms later, once the scene has settled —
@@ -544,6 +672,7 @@
     toastOutcome = null;
     toastData = null;
     toastConfidence = null;
+    toastConfNum = null;
     toastStage = 1;
     if (toastEl) toastEl.hidden = true;
   }
@@ -554,9 +683,23 @@
     const btn = toastShadow.querySelector(`.stage1 .btn[data-val="${value}"]`);
     if (btn) btn.classList.add('flash'); // accent select flash on tap
     toastConfidence = value;
-    Store.setConfidence(fp, value).catch((e) =>
+    const setConfidenceDone = Store.setConfidence(fp, value).catch((e) =>
       console.debug('[Cert Buddy] setConfidence failed', e)
     );
+    // "didn't know" (wrong-dialect only) IS the never-learned classification
+    // — fill it onto the auto-captured miss the moment it's picked, instead
+    // of waiting for a debrief triage pass. Chained after setConfidence's
+    // write settles (not fired in parallel): both read-mutate-write the
+    // same storage blob, and racing them risks one silently dropping the
+    // other's change on write. This doesn't delay the stage-2 morph below,
+    // which is scheduled independently.
+    if (value === 'didnt-know') {
+      setConfidenceDone.then(() =>
+        Store.setNeverLearnedByFp(fp).catch((e) =>
+          console.debug('[Cert Buddy] setNeverLearnedByFp failed', e)
+        )
+      );
+    }
     // Morph to stage 2 shortly after — the flash gets one short paint first,
     // same timing feel as the old dismiss-on-tap, but the toast itself stays
     // (does NOT dismiss): the "why" prompt is the point of this feature.
@@ -572,7 +715,35 @@
     stage2El.hidden = false;
     const input = toastShadow.getElementById('stage2Input');
     input.value = '';
-    input.focus();
+
+    // The numeric scale renders on BOTH dialects (it's dialect-agnostic —
+    // just "how sure, 1-10") — reset any stale selection from a previous
+    // toast, then focus the scale CONTAINER (tabindex=-1), not the input,
+    // so a bare digit keypress drives the scale first. Typing into the
+    // input is still one click/tab away, and once it has focus,
+    // isTypingTarget() hands digits back to plain text (same guard stage 1
+    // already relies on for its own digit keys).
+    toastConfNum = null;
+    for (const b of toastShadow.querySelectorAll('.scale-btn')) b.classList.remove('selected');
+    toastShadow.getElementById('scale').focus();
+  }
+
+  /**
+   * Stage-2 numeric confidence scale. Fires from either a scale-button
+   * click (works no matter what currently has focus) or a bare digit
+   * keydown while the why-input isn't focused (see the window keydown
+   * listener below). Either path ends by moving focus INTO the why-input —
+   * the scale tap is a fast first move, but the sentence is still the
+   * point of this feature.
+   */
+  function selectConfNum(n) {
+    if (toastStage !== 2 || !toastShadow) return;
+    toastConfNum = n;
+    for (const b of toastShadow.querySelectorAll('.scale-btn')) {
+      b.classList.toggle('selected', Number(b.dataset.n) === n);
+    }
+    const input = toastShadow.getElementById('stage2Input');
+    if (input) input.focus();
   }
 
   function stage2Save() {
@@ -591,25 +762,41 @@
    * during stage 2, which behaves like [skip]) — the only difference between
    * them is whether `text` is empty.
    *
+   *  - confNum commits on EITHER dialect, [save] or [skip] alike — a tapped
+   *    number is data even with no sentence attached, same "first tap wins"
+   *    rule as confidence (see Store.setConfNum). Chained ahead of whichever
+   *    Store call follows it below (not fired in parallel with it) so the
+   *    two read-mutate-write cycles against the same storage blob can't
+   *    race and silently drop one of the writes.
    *  - INCORRECT: the miss record already exists (auto-captured back in
-   *    handleCandidate/autoCaptureMiss) — non-empty text just fills/append
-   *    its notes via Store.setNotesByFp. Empty text is a true no-op; the
-   *    record and its (possibly still-null) confidence are untouched here.
+   *    handleCandidate/autoCaptureMiss) — non-empty text just fills/appends
+   *    its notes via Store.setNotesByFp. Empty text is a true no-op beyond
+   *    the confNum commit above; the record and its (possibly still-null)
+   *    confidence are otherwise untouched here.
    *  - CORRECT: nothing was auto-created at detection time. A record is
    *    worth creating only if this capture has something to say: non-empty
    *    text, OR a shaky confidence ('guessed'/'memorized') that's worth
-   *    flagging even with no sentence attached. Plain "knew it"/"between 2"
-   *    with no text is a clean right — outcome-only, no record.
+   *    flagging even with no sentence attached. Plain "knew it"/"between
+   *    two"/"intuition" with no text is a clean right — outcome-only, no
+   *    record.
    */
   function finishStage2(text) {
     const fp = toastFp;
     const outcome = toastOutcome;
     const data = toastData;
     const confidence = toastConfidence;
+    const confNum = toastConfNum;
+
+    const confNumDone =
+      fp && confNum !== null
+        ? Store.setConfNum(fp, confNum).catch((e) => console.debug('[Cert Buddy] setConfNum failed', e))
+        : Promise.resolve();
 
     if (fp && outcome === 'incorrect' && text) {
-      Store.setNotesByFp(fp, text).catch((e) =>
-        console.debug('[Cert Buddy] setNotesByFp failed', e)
+      confNumDone.then(() =>
+        Store.setNotesByFp(fp, text).catch((e) =>
+          console.debug('[Cert Buddy] setNotesByFp failed', e)
+        )
       );
     } else if (fp && outcome === 'correct' && (text || confidence === 'guessed' || confidence === 'memorized')) {
       const detected = safe(
@@ -621,21 +808,24 @@
           }),
         { apply: [], suggest: [] }
       );
-      Store.addMiss({
-        host: location.hostname,
-        url: location.href.slice(0, 500),
-        exam: (data && data.exam) || '',
-        question: (data && data.question) || '',
-        yourAnswer: (data && data.yourAnswer) || '',
-        correctAnswer: (data && data.correctAnswer) || '',
-        topics: detected.apply,
-        disc: (data && data.disc) || '',
-        notes: text,
-        reason: '',
-        triaged: true,
-        shaky: confidence === 'guessed',
-        confidence
-      }).catch((e) => console.debug('[Cert Buddy] correct-capture addMiss failed', e));
+      confNumDone.then(() =>
+        Store.addMiss({
+          host: location.hostname,
+          url: location.href.slice(0, 500),
+          exam: (data && data.exam) || '',
+          question: (data && data.question) || '',
+          yourAnswer: (data && data.yourAnswer) || '',
+          correctAnswer: (data && data.correctAnswer) || '',
+          topics: detected.apply,
+          disc: (data && data.disc) || '',
+          notes: text,
+          reason: '',
+          triaged: true,
+          shaky: confidence === 'guessed',
+          confidence,
+          confNum
+        }).catch((e) => console.debug('[Cert Buddy] correct-capture addMiss failed', e))
+      );
     }
 
     hideToast();
@@ -657,19 +847,35 @@
   window.addEventListener(
     'keydown',
     (e) => {
-      // toastStage !== 1 is belt-and-suspenders: stage 2's own focused input
-      // already makes isTypingTarget(e) true below, so 1-4 typed there never
-      // reach chooseConfidence — this just makes that explicit rather than
-      // relying solely on focus plumbing.
-      if (!toastFp || toastEl.hidden || toastStage !== 1) return;
+      if (!toastFp || !toastEl || toastEl.hidden) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return; // plain keys only
-      const value = CONFIDENCE_KEYS[e.key];
-      if (!value) return;
-      const btnFor = toastShadow.querySelector(`.stage1 .btn[data-val="${value}"]`);
-      if (btnFor && btnFor.hidden) return; // e.g. memorized on a wrong answer
+      // isTypingTarget is the REAL guard against stealing digits from the
+      // stage-2 input (not stopPropagation on the input's own listener
+      // below — this is a capture-phase listener on window, so it sees the
+      // event before that handler runs). Checked once, up front, for both
+      // branches below.
       if (isTypingTarget(e)) return;
-      e.preventDefault();
-      chooseConfidence(value);
+
+      if (toastStage === 1) {
+        // Key meaning is dialect- AND position-dependent (key 4 is 'between
+        // two' on the correct dialect, 'didnt-know' on the wrong one) — see
+        // applyDialect above, which stamps each VISIBLE button with the
+        // data-key it currently claims. A hidden button was stripped of its
+        // data-key there, so it can never match here — the hidden-button
+        // guard falls out for free instead of needing a separate check.
+        const btnFor = toastShadow.querySelector(`.stage1 .btn[data-key="${e.key}"]:not([hidden])`);
+        if (!btnFor) return;
+        e.preventDefault();
+        chooseConfidence(btnFor.dataset.val);
+        return;
+      }
+
+      if (toastStage === 2) {
+        const n = SCALE_KEYS[e.key];
+        if (!n) return;
+        e.preventDefault();
+        selectConfNum(n);
+      }
     },
     true
   );

@@ -55,6 +55,13 @@
    * the UI never has to know the old ids existed. Unrecognised/empty values
    * fall through to ''.
    */
+  // NOTE: the literal string 'didnt-know' is ALSO, separately, a confidence
+  // enum value (see the Miss/Outcome typedefs below) — chosen on the
+  // wrong-answer dialect of the outcomes.js toast. Two unrelated fields
+  // (m.reason here vs. m/o.confidence) happen to share a spelling; there is
+  // no collision in stored data, and this map is never consulted for
+  // confidence values (migrateReason/LEGACY_REASON_MAP only ever look at
+  // `reason`). Kept as a coincidence worth a comment, not a bug.
   const LEGACY_REASON_MAP = {
     'didnt-know': 'never-learned',
     'confused-two': 'never-learned',
@@ -91,25 +98,33 @@
       // Records that already have the field (including explicit `false` from
       // a quick-save) pass through untouched.
       triaged: m.triaged !== undefined ? !!m.triaged : !!(m.reason || m.fact),
-      // 'knew' | 'narrowed' | 'guessed' | 'memorized' | null. Backfilled from
-      // the outcome toast (see addMiss) — records that predate confidence
-      // just get null. Migration: the toast's second button used to be
-      // labeled/valued 'unsure' — old records on disk still carry that
-      // literal string, so it's mapped to the current 'narrowed' here on
-      // every read instead of being rewritten in storage.
-      confidence: m.confidence === 'unsure' ? 'narrowed' : (m.confidence ?? null)
+      // 'knew' | 'narrowed' | 'guessed' | 'memorized' | 'intuition' |
+      // 'didnt-know' | null. Backfilled from the outcome toast (see
+      // addMiss) — records that predate confidence just get null.
+      // Migration: the toast's second button used to be labeled/valued
+      // 'unsure' — old records on disk still carry that literal string, so
+      // it's mapped to the current 'narrowed' here on every read instead of
+      // being rewritten in storage.
+      confidence: m.confidence === 'unsure' ? 'narrowed' : (m.confidence ?? null),
+      // Numeric 1-10 self-rating from the same toast's stage-2 scale,
+      // independent of (and addable alongside) the confidence bucket above.
+      // Older records predate the field entirely — backfilled to null, no
+      // migration table needed since it never had a different shape.
+      confNum: m.confNum ?? null
     };
   }
 
   /**
    * Same 'unsure' -> 'narrowed' confidence migration as normalizeMiss, for
-   * outcome records. Deliberately minimal — outcomes otherwise predate no
-   * other fields the way old misses do, so nothing else here is touched or
-   * backfilled.
+   * outcome records — plus a confNum presence backfill, applied
+   * unconditionally (unlike the confidence migration, which only fires on
+   * the literal legacy value) since older records predate the field
+   * entirely rather than having stored it under an old name.
    */
   function normalizeOutcome(o) {
-    if (!o || o.confidence !== 'unsure') return o;
-    return { ...o, confidence: 'narrowed' };
+    if (!o) return o;
+    const confidence = o.confidence === 'unsure' ? 'narrowed' : o.confidence;
+    return { ...o, confidence, confNum: o.confNum ?? null };
   }
 
   /**
@@ -125,6 +140,37 @@
     if (outcome && outcome.confidence !== null && outcome.confidence !== undefined) {
       record.confidence = outcome.confidence;
     }
+  }
+
+  /**
+   * Same idea as joinConfidenceFromOutcome, for the numeric confNum field —
+   * kept as a parallel function rather than folded into the one above so
+   * neither field's join can accidentally gate on the other's presence.
+   */
+  function joinConfNumFromOutcome(record, db) {
+    if (record.confNum !== null && record.confNum !== undefined) return;
+    if (!record.fp) return;
+    const outcome = db.outcomes.find((o) => o.fp === record.fp);
+    if (outcome && outcome.confNum !== null && outcome.confNum !== undefined) {
+      record.confNum = outcome.confNum;
+    }
+  }
+
+  /**
+   * Pure clamp for Store.setConfNum: any finite input rounds to the nearest
+   * integer and clamps into 1..10; anything non-numeric (NaN, Infinity,
+   * undefined, a non-numeric string) returns null so a bad call is a silent
+   * no-op rather than storing garbage. Exposed on Store (like
+   * migrateReason/fingerprint) purely so tests/test.html can exercise the
+   * clamping rule directly, without a chrome.storage round trip.
+   */
+  function clampConfNum(n) {
+    // Number(null) and Number('') are 0 — finite, so they'd clamp to a
+    // phantom 1. Empty-ish inputs are explicit no-ops.
+    if (n === null || n === undefined || n === '') return null;
+    const num = Number(n);
+    if (!Number.isFinite(num)) return null;
+    return Math.min(10, Math.max(1, Math.round(num)));
   }
 
   async function read() {
@@ -209,11 +255,22 @@
    *                                 or reviewed later in the debrief)
    * @property {boolean} shaky      logged as "got it right" but only by guessing — counts like a
    *                                 miss for weak-area weighting
-   * @property {?('knew'|'narrowed'|'guessed'|'memorized')} confidence  self-rated confidence, joined
-   *                                 in from the matching Outcome by fp at capture time if not set
-   *                                 explicitly. 'memorized' = high certainty, zero reasoning (pure
-   *                                 answer-recognition on a reused question) — see focusTopics and
-   *                                 isStubborn-style graduation logic for how this discounts a right.
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know')} confidence
+   *                                 self-rated confidence, joined in from the matching Outcome by fp
+   *                                 at capture time if not set explicitly. 'memorized' = high
+   *                                 certainty, zero reasoning (pure answer-recognition on a reused
+   *                                 question) — see focusTopics and isStubborn-style graduation logic
+   *                                 for how this discounts a right. 'intuition' = correct-only,
+   *                                 genuine recognition-primed competence — deliberately NOT given the
+   *                                 same discount as 'memorized'; focusTopics/isStubborn key on the
+   *                                 literal 'memorized' string only, so an 'intuition' right cools
+   *                                 topics and graduates Stubborn questions same as any other right.
+   *                                 'didnt-know' = wrong-only, the toast's explicit "topic was
+   *                                 entirely foreign" pick (see Store.setNeverLearnedByFp).
+   * @property {?number} confNum    self-rated numeric confidence, 1-10, from the toast's stage-2
+   *                                 scale — independent of the `confidence` bucket above and
+   *                                 collected on either outcome dialect. Same first-tap-wins join
+   *                                 rule as confidence (see Store.setConfNum / joinConfNumFromOutcome).
    *
    * NOTE on 'memorized' as a single-value field: once a fp is flagged
    * memorized (via an Outcome or an explicit tagger save), that flag doesn't
@@ -233,8 +290,11 @@
    * @property {string} fp             fingerprint used to match repeats (same function as Miss.fp)
    * @property {string} questionSnippet  first 200 chars of the question text
    * @property {'correct'|'incorrect'} outcome
-   * @property {?('knew'|'narrowed'|'guessed'|'memorized')} confidence  set once via the toast, first
-   *                                 tap wins
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know')} confidence  set
+   *                                 once via the toast, first tap wins
+   * @property {?number} confNum       self-rated numeric confidence, 1-10, from the toast's stage-2
+   *                                 scale, set once, first tap wins — independent of `confidence`,
+   *                                 collected on either outcome dialect
    * @property {string} exam
    * @property {number} ts             epoch ms of the first detection
    * @property {number[]} attempts     every time this outcome was (re-)detected
@@ -264,6 +324,9 @@
     // normalizeOutcome above) directly, without a chrome.storage round trip.
     normalizeMiss,
     normalizeOutcome,
+    // Exposed so tests/test.html can exercise setConfNum's clamping rule
+    // directly — see clampConfNum's own doc comment.
+    clampConfNum,
 
     /** The existing record for this question, if you've missed it before. */
     async findRepeat(question) {
@@ -358,6 +421,16 @@
             joinConfidenceFromOutcome(existing, db);
           }
         }
+        // confNum: same first-fill-wins rule, parallel to confidence above
+        // (deliberately a separate branch, not folded in, so neither field's
+        // fill can gate on the other's presence).
+        if (existing.confNum === null || existing.confNum === undefined) {
+          if (partial.confNum !== null && partial.confNum !== undefined) {
+            existing.confNum = partial.confNum;
+          } else {
+            joinConfNumFromOutcome(existing, db);
+          }
+        }
         db.misses.sort((a, b) => b.ts - a.ts);
         await write(db);
         return { miss: existing, repeat: true, attempt: existing.attempts.length };
@@ -381,6 +454,7 @@
         triaged: false,
         shaky: false,
         confidence: null,
+        confNum: null,
         ...partial,
         fp,
         attempts: [now]
@@ -388,10 +462,14 @@
       // A quick-capture is only "triaged" if a reason was actually picked at
       // save time — don't let a caller-omitted flag silently mark it done.
       if (partial.triaged === undefined) miss.triaged = !!miss.reason;
-      // Join confidence in from the passive-outcome log at capture time, if
-      // this capture didn't already bring its own and one exists for the fp.
+      // Join confidence/confNum in from the passive-outcome log at capture
+      // time, if this capture didn't already bring its own and one exists
+      // for the fp.
       if (miss.confidence === null || miss.confidence === undefined) {
         joinConfidenceFromOutcome(miss, db);
+      }
+      if (miss.confNum === null || miss.confNum === undefined) {
+        joinConfNumFromOutcome(miss, db);
       }
       db.misses.unshift(miss);
       await write(db);
@@ -470,6 +548,7 @@
         questionSnippet: String(questionSnippet || '').slice(0, 200),
         outcome,
         confidence,
+        confNum: null,
         exam: exam || '',
         ts: now,
         attempts: [now],
@@ -505,6 +584,64 @@
 
       if (outcome || missesUpdated) await write(db);
       return { outcome, missesUpdated };
+    },
+
+    /**
+     * Numeric-scale sibling of setConfidence, same first-tap-wins rule and
+     * same shape: sets confNum on the outcome record for this fp only if
+     * it's currently null, and does the same for any miss record sharing
+     * the fp. `n` is clamped/rounded into 1..10 via clampConfNum; a
+     * non-numeric `n` clamps to null and this becomes a no-op (matches
+     * clampConfNum's own contract — never stores garbage). Correct-answer-
+     * only in practice (the toast only ever offers the scale there) is
+     * enforced by the caller, not here — this function itself has no
+     * opinion on which outcome dialect called it.
+     */
+    async setConfNum(fp, n) {
+      if (!fp) return { outcome: null, missesUpdated: 0 };
+      const clamped = clampConfNum(n);
+      if (clamped === null) return { outcome: null, missesUpdated: 0 };
+      const db = await read();
+
+      const outcome = db.outcomes.find((o) => o.fp === fp) || null;
+      if (outcome && (outcome.confNum === null || outcome.confNum === undefined)) {
+        outcome.confNum = clamped;
+      }
+
+      let missesUpdated = 0;
+      for (const m of db.misses) {
+        if (m.fp === fp && (m.confNum === null || m.confNum === undefined)) {
+          m.confNum = clamped;
+          missesUpdated++;
+        }
+      }
+
+      if (outcome || missesUpdated) await write(db);
+      return { outcome, missesUpdated };
+    },
+
+    /**
+     * "didn't know" (the wrong-dialect confidence pick meaning "topic was
+     * entirely foreign, I knew I was blank") IS the never-learned
+     * classification — this fills it onto the auto-captured miss record for
+     * `fp` the instant the toast records that pick (see chooseConfidence in
+     * outcomes.js), instead of leaving it for a separate debrief triage
+     * pass. Only fills `reason` if it's currently empty — a reason already
+     * chosen (by a prior capture, or a manual tagger edit that landed
+     * first) is never overwritten. No-op if no miss with this fp exists yet
+     * (same limitation as setNotesByFp — nothing here depends on the
+     * auto-capture having already run, it just normally has by the time a
+     * user reaches this).
+     */
+    async setNeverLearnedByFp(fp) {
+      if (!fp) return null;
+      const db = await read();
+      const m = db.misses.find((x) => x.fp === fp);
+      if (!m || m.reason) return null;
+      m.reason = 'never-learned';
+      m.triaged = true;
+      await write(db);
+      return m;
     },
 
     /**
