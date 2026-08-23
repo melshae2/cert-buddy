@@ -563,20 +563,27 @@
      * First tap wins: sets confidence on the outcome record for this fp only
      * if it's currently null, and does the same for any miss record sharing
      * the fp (covers the case where the miss was logged before the toast was
-     * answered). Never overwrites an existing confidence either side.
+     * answered). Never overwrites an existing confidence either side —
+     * UNLESS `force: true` is passed, which overwrites a non-null value on
+     * both sides too. `force` exists ONLY for the outcomes.js toast's own
+     * "← back, re-pick" flow (a stage-1 mistap used to be permanent under
+     * plain first-wins, which stopped being acceptable once there were 5
+     * reshuffled buttons to fat-finger) — every other caller keeps calling
+     * this with no third argument, so the default stays first-wins and
+     * nothing about their behavior changes.
      */
-    async setConfidence(fp, confidence) {
+    async setConfidence(fp, confidence, { force = false } = {}) {
       if (!fp) return { outcome: null, missesUpdated: 0 };
       const db = await read();
 
       const outcome = db.outcomes.find((o) => o.fp === fp) || null;
-      if (outcome && (outcome.confidence === null || outcome.confidence === undefined)) {
+      if (outcome && (force || outcome.confidence === null || outcome.confidence === undefined)) {
         outcome.confidence = confidence;
       }
 
       let missesUpdated = 0;
       for (const m of db.misses) {
-        if (m.fp === fp && (m.confidence === null || m.confidence === undefined)) {
+        if (m.fp === fp && (force || m.confidence === null || m.confidence === undefined)) {
           m.confidence = confidence;
           missesUpdated++;
         }
@@ -587,30 +594,31 @@
     },
 
     /**
-     * Numeric-scale sibling of setConfidence, same first-tap-wins rule and
-     * same shape: sets confNum on the outcome record for this fp only if
-     * it's currently null, and does the same for any miss record sharing
-     * the fp. `n` is clamped/rounded into 1..10 via clampConfNum; a
-     * non-numeric `n` clamps to null and this becomes a no-op (matches
-     * clampConfNum's own contract — never stores garbage). Correct-answer-
-     * only in practice (the toast only ever offers the scale there) is
-     * enforced by the caller, not here — this function itself has no
-     * opinion on which outcome dialect called it.
+     * Numeric-scale sibling of setConfidence, same first-tap-wins rule
+     * (with the same `force` escape hatch, same restriction to the toast's
+     * own re-pick flow) and same shape: sets confNum on the outcome record
+     * for this fp only if it's currently null (or unconditionally if
+     * `force`), and does the same for any miss record sharing the fp. `n`
+     * is clamped/rounded into 1..10 via clampConfNum; a non-numeric `n`
+     * clamps to null and this becomes a no-op (matches clampConfNum's own
+     * contract — never stores garbage) regardless of `force`. Which outcome
+     * dialect called it is the caller's business, not this function's — the
+     * scale renders (and this gets called) on both.
      */
-    async setConfNum(fp, n) {
+    async setConfNum(fp, n, { force = false } = {}) {
       if (!fp) return { outcome: null, missesUpdated: 0 };
       const clamped = clampConfNum(n);
       if (clamped === null) return { outcome: null, missesUpdated: 0 };
       const db = await read();
 
       const outcome = db.outcomes.find((o) => o.fp === fp) || null;
-      if (outcome && (outcome.confNum === null || outcome.confNum === undefined)) {
+      if (outcome && (force || outcome.confNum === null || outcome.confNum === undefined)) {
         outcome.confNum = clamped;
       }
 
       let missesUpdated = 0;
       for (const m of db.misses) {
-        if (m.fp === fp && (m.confNum === null || m.confNum === undefined)) {
+        if (m.fp === fp && (force || m.confNum === null || m.confNum === undefined)) {
           m.confNum = clamped;
           missesUpdated++;
         }
@@ -632,6 +640,12 @@
      * (same limitation as setNotesByFp — nothing here depends on the
      * auto-capture having already run, it just normally has by the time a
      * user reaches this).
+     *
+     * Returning the miss on success (null on no-op) is load-bearing: the
+     * toast uses truthiness of the return value — not a later re-read of
+     * `reason` — to know whether ITS OWN pick is what just got applied, so
+     * it knows whether a later change-of-mind should call
+     * clearNeverLearnedByFp. See that function's own doc comment.
      */
     async setNeverLearnedByFp(fp) {
       if (!fp) return null;
@@ -640,6 +654,30 @@
       if (!m || m.reason) return null;
       m.reason = 'never-learned';
       m.triaged = true;
+      await write(db);
+      return m;
+    },
+
+    /**
+     * Reverts setNeverLearnedByFp's auto-classification: resets `reason` to
+     * '' and `triaged` to false on the miss record for `fp`. Call this ONLY
+     * when the caller already knows — via its own state (outcomes.js's
+     * toastAutoReasonSetByToast flag), not by comparing the current value of
+     * `reason`) — that ITS earlier setNeverLearnedByFp call is what set the
+     * reason. A value comparison can't tell "the toast set this" apart from
+     * "a pre-existing or panel-set reason just happens to already read
+     * 'never-learned'" — which is exactly why this function performs the
+     * revert unconditionally (short of the record existing at all) instead
+     * of re-deriving its own guard from `reason`. No-op if no miss with this
+     * fp exists.
+     */
+    async clearNeverLearnedByFp(fp) {
+      if (!fp) return null;
+      const db = await read();
+      const m = db.misses.find((x) => x.fp === fp);
+      if (!m) return null;
+      m.reason = '';
+      m.triaged = false;
       await write(db);
       return m;
     },

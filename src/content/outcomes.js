@@ -30,6 +30,26 @@
  * feature exists to collect, the scale is a lower-friction number-only
  * fallback, not the manual tagger panel.
  *
+ * Mistap recovery: a stage-1 pick is no longer permanent. "← back" in
+ * stage 2 returns to stage 1 for the SAME fp with all buttons re-enabled;
+ * re-picking OVERWRITES the earlier choice (see the `force` option on
+ * Store.setConfidence/setConfNum — first-tap-wins is still the default for
+ * every other caller, it's only overridden on this toast's own re-pick
+ * path). The why-text and any tapped scale value survive the round trip
+ * unchanged; only a genuinely NEW toast (a different fp) resets them. If
+ * the backed-out choice was 'didnt-know' (which auto-classified the miss —
+ * see Store.setNeverLearnedByFp), moving to a DIFFERENT choice reverts that
+ * classification via Store.clearNeverLearnedByFp, guarded by this toast's
+ * own toastAutoReasonSetByToast flag so a pre-existing or panel-set reason
+ * is never touched.
+ *
+ * The toast no longer dismisses on an outside click (that killed it mid-
+ * flow every time the page itself was scrolled or read) — only [save],
+ * [skip], the × (top-right), or a new question's toast replacing it end
+ * this one. × is "close", not "undo": anything already committed (a
+ * stage-1 confidence pick commits immediately; a tapped-but-unsaved scale
+ * value commits on close too, see commitConfNum) stays recorded.
+ *
  * Feature 3 (auto-capture): an INCORRECT outcome automatically creates/merges
  * a miss record from the same extraction used for the outcome, so the record
  * exists before the user ever opens the tagger panel. A CORRECT outcome only
@@ -320,7 +340,11 @@
       border-left: 4px solid var(--toast-accent);
       border-radius: var(--radius);
       box-shadow: 0 14px 36px rgba(0,0,0,.35);
-      padding: 12px 12px 12px 16px; font-size: 14px;
+      /* Right padding leaves room for .x in the top-right corner without it
+         overlapping button/label text — .toast's own fixed positioning is
+         already a valid containing block, so .x just needs absolute
+         positioning, no extra wrapper. */
+      padding: 12px 32px 12px 16px; font-size: 14px;
       animation: cb-toast-in .26s cubic-bezier(.2,.9,.3,1.15);
     }
     /* One small overshoot — a lone motion onset in a settled scene. */
@@ -407,6 +431,19 @@
     }
     .details-link:hover { color: var(--toast-fg); }
     .details-link:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
+
+    /* Re-added close button (same muted styling this toast had pre-v0.15,
+       before outside-click dismiss briefly replaced it) — top-right via
+       absolute positioning now, since stage 2's column layout (scale +
+       input row) is taller than the single-row shape this button was
+       originally styled against. */
+    .x {
+      position: absolute; top: 6px; right: 6px;
+      border: 0; background: transparent; color: var(--toast-muted); cursor: pointer;
+      font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+    }
+    .x:hover { color: var(--toast-fg); background: color-mix(in srgb, var(--toast-fg) 10%, transparent); }
+    .x:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
   `;
 
   const ALL_CONFIDENCE_VALS = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know'];
@@ -444,6 +481,18 @@
   let toastConfidence = null; // the stage-1 choice, once made
   let toastConfNum = null; // the stage-2 scale choice (1-10), once made
   let toastStage = 1; // 1 (confidence buttons) | 2 (the "why" prompt + scale)
+  // Set the moment "← back" is used at least once in this toast's session —
+  // reused for two things that are really the same underlying condition:
+  // (1) Store.setConfidence/setConfNum calls pass { force: toastRepicked }
+  //     so a re-pick overwrites instead of losing to first-tap-wins, and
+  // (2) showStage2() skips its input/scale reset on re-entry, so a mistap
+  //     doesn't cost an already-typed sentence or an already-tapped number.
+  let toastRepicked = false;
+  // True only while THIS toast's own setNeverLearnedByFp call is what's
+  // currently sitting in the miss's reason field — see chooseConfidence and
+  // Store.clearNeverLearnedByFp's doc comment for why this has to be a
+  // flag, not a value comparison against a pre-existing/panel-set reason.
+  let toastAutoReasonSetByToast = false;
 
   function buildToastHost() {
     const host = document.createElement('div');
@@ -487,6 +536,7 @@
           <div class="stage2-row">
             <input type="text" id="stage2Input" class="stage2-input" autocomplete="off" spellcheck="false"
                    placeholder="why? didn't know… / not sure about…">
+            <button type="button" class="details-link" id="stage2Back">← back</button>
             <div class="btns">
               <button type="button" class="btn" id="stage2Save">save</button>
               <button type="button" class="btn" id="stage2Skip">skip</button>
@@ -494,6 +544,7 @@
             <button type="button" class="details-link" id="stage2Details">details</button>
           </div>
         </div>
+        <button type="button" class="x" id="toastX" title="Close — anything already recorded stays">×</button>
       </div>`;
     shadow.appendChild(wrap);
 
@@ -518,6 +569,8 @@
 
     shadow.getElementById('stage2Save').addEventListener('click', stage2Save);
     shadow.getElementById('stage2Skip').addEventListener('click', stage2Skip);
+    shadow.getElementById('stage2Back').addEventListener('click', backToStage1);
+    shadow.getElementById('toastX').addEventListener('click', dismissToast);
     // Loose coupling by design: outcomes.js and tagger.js are two independent
     // shadow-root modules with no shared object between them (see the
     // manifest's load order — this file has no reference to tagger.js's
@@ -540,34 +593,12 @@
         e.preventDefault();
         stage2Save();
       } else if (e.key === 'Escape') {
+        // Escape in stage 2 means BACK now, not skip — [skip] stays
+        // available as its own explicit button for "discard and end".
         e.preventDefault();
-        stage2Skip();
+        backToStage1();
       }
     });
-
-    // Outside-dismiss replaces the old × button: any pointerdown whose
-    // composed path doesn't pass through this host clears the toast WITHOUT
-    // recording a confidence — moving on with the exam (Udemy's own "Next
-    // question" control, clicking anywhere else on the page) dismisses it
-    // for free. In stage 2 the confidence choice is already saved (stage 1
-    // already ran), so an outside click there is equivalent to tapping
-    // [skip] — it discards only the still-unsaved "why" text, same as
-    // stage2Skip(). capture:true so this sees the event before the study
-    // site's own handlers can stop propagation; composedPath (not e.target)
-    // so it correctly reads a pointerdown on one of the toast's OWN buttons
-    // as "inside" — that must fall through to the button's click handler and
-    // record a choice, not get raced by this same pointerdown into hiding
-    // the toast first.
-    document.addEventListener(
-      'pointerdown',
-      (e) => {
-        if (!toastFp || !toastEl || toastEl.hidden) return;
-        if (e.composedPath().includes(host)) return;
-        if (toastStage === 2) stage2Skip();
-        else hideToast();
-      },
-      true
-    );
 
     return shadow;
   }
@@ -617,6 +648,8 @@
     toastConfidence = null;
     toastConfNum = null;
     toastStage = 1;
+    toastRepicked = false;
+    toastAutoReasonSetByToast = false;
 
     // Always (re-)enter on stage 1, buttons unflashed — a toast for a new
     // question reuses this same host/shadow, so a stage-2/flash/scale-
@@ -660,10 +693,10 @@
       toastEl.hidden = false;
     }, 400);
     // No auto-dismiss (user decision): the tap is high-value and costs
-    // nothing, so the toast stays until stage 2 is saved/skipped, or a
-    // pointerdown outside it dismisses it. It stays bound to the fp that
-    // spawned it; the next question's outcome simply replaces it via this
-    // same function.
+    // nothing, so the toast stays until [save], [skip], the ×, or a new
+    // question's toast replaces it via this same function. (An outside
+    // click on the page used to dismiss it too — removed: live use showed
+    // it killing the toast mid-flow on nothing more than a page scroll.)
   }
 
   function hideToast() {
@@ -674,7 +707,25 @@
     toastConfidence = null;
     toastConfNum = null;
     toastStage = 1;
+    toastRepicked = false;
+    toastAutoReasonSetByToast = false;
     if (toastEl) toastEl.hidden = true;
+  }
+
+  /**
+   * × / stage-1 Escape: closes the toast WITHOUT recording anything new —
+   * but it's "close", not "undo". A stage-1 confidence pick already
+   * committed the instant it was tapped (chooseConfidence's own
+   * Store.setConfidence call), so it needs no help here; confNum is the one
+   * field normally left uncommitted until [save]/[skip]
+   * (finishStage2/commitConfNum), so this commits it too if the user tapped
+   * a scale value — closing must never silently drop that the way it
+   * wouldn't if they'd hit [skip] instead. No notes/miss-record side effect
+   * beyond that: that's what [skip] is for.
+   */
+  function dismissToast() {
+    commitConfNum(toastFp);
+    hideToast();
   }
 
   function chooseConfidence(value) {
@@ -683,7 +734,14 @@
     const btn = toastShadow.querySelector(`.stage1 .btn[data-val="${value}"]`);
     if (btn) btn.classList.add('flash'); // accent select flash on tap
     toastConfidence = value;
-    const setConfidenceDone = Store.setConfidence(fp, value).catch((e) =>
+    // force: toastRepicked — plain first-tap-wins would make a stage-1
+    // mistap permanent, which stopped being acceptable once there were 5
+    // reshuffled buttons to fat-finger. toastRepicked is false on the very
+    // first pick (so this behaves exactly as it always did — a no-op
+    // difference, since there's nothing to overwrite yet) and becomes true
+    // the moment "← back" is used, so every pick AFTER a back overwrites
+    // instead of losing to first-wins.
+    const setConfidenceDone = Store.setConfidence(fp, value, { force: toastRepicked }).catch((e) =>
       console.debug('[Cert Buddy] setConfidence failed', e)
     );
     // "didn't know" (wrong-dialect only) IS the never-learned classification
@@ -694,9 +752,31 @@
     // other's change on write. This doesn't delay the stage-2 morph below,
     // which is scheduled independently.
     if (value === 'didnt-know') {
+      // Skip the redundant call if THIS toast's own classification is
+      // already standing (re-picking 'didnt-know' straight after a back,
+      // with no different choice in between) — Store.setNeverLearnedByFp's
+      // own guard would otherwise see the reason it set earlier as already
+      // non-empty, no-op, and incorrectly report "not mine" by returning
+      // null, which would wrongly clear toastAutoReasonSetByToast below.
+      if (!toastAutoReasonSetByToast) {
+        setConfidenceDone.then(() =>
+          Store.setNeverLearnedByFp(fp)
+            .then((m) => {
+              toastAutoReasonSetByToast = !!m;
+            })
+            .catch((e) => console.debug('[Cert Buddy] setNeverLearnedByFp failed', e))
+        );
+      }
+    } else if (toastAutoReasonSetByToast) {
+      // Moving AWAY from 'didnt-know' to something else reverts the
+      // auto-classification — but ONLY because the flag says THIS toast is
+      // what set it (see Store.clearNeverLearnedByFp's doc comment: a
+      // pre-existing or panel-set reason is never touched, and the flag —
+      // not a value comparison — is what tells the two apart).
+      toastAutoReasonSetByToast = false;
       setConfidenceDone.then(() =>
-        Store.setNeverLearnedByFp(fp).catch((e) =>
-          console.debug('[Cert Buddy] setNeverLearnedByFp failed', e)
+        Store.clearNeverLearnedByFp(fp).catch((e) =>
+          console.debug('[Cert Buddy] clearNeverLearnedByFp failed', e)
         )
       );
     }
@@ -714,18 +794,46 @@
     const stage2El = toastShadow.getElementById('stage2');
     stage2El.hidden = false;
     const input = toastShadow.getElementById('stage2Input');
-    input.value = '';
+
+    // A FRESH entry into stage 2 (toastRepicked still false — no back has
+    // happened yet this session) resets the input/scale same as always. A
+    // re-entry AFTER "← back" deliberately preserves both instead — a
+    // mistapped CATEGORY shouldn't cost the user a sentence they'd already
+    // started typing or a scale value they'd already tapped.
+    if (!toastRepicked) {
+      input.value = '';
+      toastConfNum = null;
+      for (const b of toastShadow.querySelectorAll('.scale-btn')) b.classList.remove('selected');
+    }
 
     // The numeric scale renders on BOTH dialects (it's dialect-agnostic —
-    // just "how sure, 1-10") — reset any stale selection from a previous
-    // toast, then focus the scale CONTAINER (tabindex=-1), not the input,
-    // so a bare digit keypress drives the scale first. Typing into the
-    // input is still one click/tab away, and once it has focus,
-    // isTypingTarget() hands digits back to plain text (same guard stage 1
-    // already relies on for its own digit keys).
-    toastConfNum = null;
-    for (const b of toastShadow.querySelectorAll('.scale-btn')) b.classList.remove('selected');
+    // just "how sure, 1-10") — focus the scale CONTAINER (tabindex=-1),
+    // not the input, either way, so a bare digit keypress drives it first
+    // (still true on a preserved re-entry: the user may want to CHANGE the
+    // number, not just keep it). Typing into the input is still one
+    // click/tab away, and once it has focus, isTypingTarget() hands digits
+    // back to plain text (same guard stage 1 already relies on for its own
+    // digit keys).
     toastShadow.getElementById('scale').focus();
+  }
+
+  /**
+   * "← back": returns the toast to stage 1 for the SAME fp, all buttons
+   * re-enabled (applyDialect already ran for this outcome back in
+   * showToast and never needs to run again — the dialect doesn't change
+   * mid-toast) so the user can re-pick. Unflashes every stage-1 button so
+   * the re-pick starts from a clean slate instead of showing two buttons
+   * "selected" at once. Marks toastRepicked so the NEXT chooseConfidence
+   * call force-overwrites (see its own comment) and the NEXT showStage2
+   * call preserves rather than resets the why-text/scale.
+   */
+  function backToStage1() {
+    if (toastStage !== 2) return;
+    toastRepicked = true;
+    toastStage = 1;
+    toastShadow.getElementById('stage2').hidden = true;
+    toastShadow.getElementById('stage1').hidden = false;
+    for (const b of toastShadow.querySelectorAll('.stage1 .btn')) b.classList.remove('flash');
   }
 
   /**
@@ -746,6 +854,23 @@
     if (input) input.focus();
   }
 
+  /**
+   * Fire-and-forget confNum commit, shared by finishStage2 ([save]/[skip])
+   * and dismissToast (×) — the two ways a toast can end while a tapped
+   * scale value is still sitting only in local state (toastConfNum). A
+   * no-op (returns an already-resolved promise) if nothing was tapped.
+   * force mirrors toastRepicked for the same reason chooseConfidence does —
+   * see its comment.
+   */
+  function commitConfNum(fp) {
+    if (fp && toastConfNum !== null) {
+      return Store.setConfNum(fp, toastConfNum, { force: toastRepicked }).catch((e) =>
+        console.debug('[Cert Buddy] setConfNum failed', e)
+      );
+    }
+    return Promise.resolve();
+  }
+
   function stage2Save() {
     if (toastStage !== 2) return;
     const text = (toastShadow.getElementById('stage2Input').value || '').trim();
@@ -758,16 +883,15 @@
   }
 
   /**
-   * Common landing point for both [save] and [skip] (and an outside click
-   * during stage 2, which behaves like [skip]) — the only difference between
-   * them is whether `text` is empty.
+   * Common landing point for both [save] and [skip] — the only difference
+   * between them is whether `text` is empty.
    *
    *  - confNum commits on EITHER dialect, [save] or [skip] alike — a tapped
    *    number is data even with no sentence attached, same "first tap wins"
-   *    rule as confidence (see Store.setConfNum). Chained ahead of whichever
-   *    Store call follows it below (not fired in parallel with it) so the
-   *    two read-mutate-write cycles against the same storage blob can't
-   *    race and silently drop one of the writes.
+   *    (or force, on a re-pick — see commitConfNum) rule as confidence.
+   *    Chained ahead of whichever Store call follows it below (not fired in
+   *    parallel with it) so the two read-mutate-write cycles against the
+   *    same storage blob can't race and silently drop one of the writes.
    *  - INCORRECT: the miss record already exists (auto-captured back in
    *    handleCandidate/autoCaptureMiss) — non-empty text just fills/appends
    *    its notes via Store.setNotesByFp. Empty text is a true no-op beyond
@@ -787,10 +911,7 @@
     const confidence = toastConfidence;
     const confNum = toastConfNum;
 
-    const confNumDone =
-      fp && confNum !== null
-        ? Store.setConfNum(fp, confNum).catch((e) => console.debug('[Cert Buddy] setConfNum failed', e))
-        : Promise.resolve();
+    const confNumDone = commitConfNum(fp);
 
     if (fp && outcome === 'incorrect' && text) {
       confNumDone.then(() =>
@@ -857,6 +978,12 @@
       if (isTypingTarget(e)) return;
 
       if (toastStage === 1) {
+        // Escape in stage 1 = same as × (close, nothing new recorded).
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          dismissToast();
+          return;
+        }
         // Key meaning is dialect- AND position-dependent (key 4 is 'between
         // two' on the correct dialect, 'didnt-know' on the wrong one) — see
         // applyDialect above, which stamps each VISIBLE button with the
@@ -871,6 +998,16 @@
       }
 
       if (toastStage === 2) {
+        // Escape in stage 2 = back (not skip — [skip] is its own explicit
+        // button). This branch covers Escape while the SCALE container (not
+        // the why-input) has focus; the input's own keydown listener
+        // handles Escape when it's focused there instead (isTypingTarget
+        // above already excludes that case from reaching here).
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          backToStage1();
+          return;
+        }
         const n = SCALE_KEYS[e.key];
         if (!n) return;
         e.preventDefault();

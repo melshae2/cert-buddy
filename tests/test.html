@@ -234,6 +234,10 @@
     assertEqual(Store.clampConfNum(null), null, 'clampConfNum: null input -> null');
     assertEqual(Store.clampConfNum(undefined), null, 'clampConfNum: undefined input -> null');
     assertEqual(Store.clampConfNum(NaN), null, 'clampConfNum: NaN input -> null');
+    // v0.16.1 fix's own stated rationale: Number('') is 0 (finite), which
+    // would otherwise clamp to a phantom 1 — same bug class as the
+    // Number(null) case above, worth its own explicit assertion.
+    assertEqual(Store.clampConfNum(''), null, "clampConfNum: empty string ('') -> null, not a phantom 1");
   }
 
   // =====================================================================
