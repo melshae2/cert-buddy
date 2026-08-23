@@ -15,14 +15,19 @@
  *     guessed(5). 'memorized' = pure answer-recognition, zero reasoning;
  *     'intuition' = genuine recognition-primed competence — NOT discounted
  *     the way 'memorized' is (see focusTopics/isStubborn in store.js).
- *   - WRONG: was sure(1) / between two(2) / guessed(3) / didn't know(4).
- *     'didnt-know' auto-classifies the auto-captured miss as never-learned
- *     (see chooseConfidence -> Store.setNeverLearnedByFp).
- * Since the SAME key can mean different things on different dialects (key 4
- * is 'between two' on one side, 'didnt-know' on the other), there's no
- * static key->value table — each button's meaning/order/key is assigned
- * per-dialect in applyDialect(), and keydown resolves against whichever
- * VISIBLE button currently claims that key.
+ *   - WRONG: silly mistake(1) / was sure(2) / between two(3) / guessed(4) /
+ *     didn't know(5), ordered by descending actual-knowledge. 'slip' ("silly
+ *     mistake") and 'didnt-know' each auto-classify the auto-captured miss's
+ *     reason the instant they're picked (misread / never-learned
+ *     respectively — see AUTO_REASON_BY_CONFIDENCE and
+ *     Store.setReasonIfEmpty) — 'slip' = knowledge was there, execution/
+ *     attention failed; 'was sure' = a misconception (confidently believed
+ *     the wrong thing); these two used to be conflated under one button.
+ * Since the SAME key can mean different things on different dialects (key 1
+ * is 'memorized' on the correct side, 'silly mistake' on the wrong one),
+ * there's no static key->value table — each button's meaning/order/key is
+ * assigned per-dialect in applyDialect(), and keydown resolves against
+ * whichever VISIBLE button currently claims that key.
  *
  * A confidence tap morphs the SAME toast into a stage 2 one-line "why"
  * prompt, PLUS a 1-10 numeric confidence scale (same dialect-agnostic
@@ -30,18 +35,21 @@
  * feature exists to collect, the scale is a lower-friction number-only
  * fallback, not the manual tagger panel.
  *
- * Mistap recovery: a stage-1 pick is no longer permanent. "← back" in
- * stage 2 returns to stage 1 for the SAME fp with all buttons re-enabled;
- * re-picking OVERWRITES the earlier choice (see the `force` option on
- * Store.setConfidence/setConfNum — first-tap-wins is still the default for
- * every other caller, it's only overridden on this toast's own re-pick
- * path). The why-text and any tapped scale value survive the round trip
- * unchanged; only a genuinely NEW toast (a different fp) resets them. If
- * the backed-out choice was 'didnt-know' (which auto-classified the miss —
- * see Store.setNeverLearnedByFp), moving to a DIFFERENT choice reverts that
- * classification via Store.clearNeverLearnedByFp, guarded by this toast's
- * own toastAutoReasonSetByToast flag so a pre-existing or panel-set reason
- * is never touched.
+ * Mistap recovery: a stage-1 pick is no longer permanent. A small ← in
+ * stage 2's upper-left corner (the visual twin of the × in the upper-right
+ * — ← re-choose, × close) returns to stage 1 for the SAME fp with all
+ * buttons re-enabled; re-picking OVERWRITES the earlier choice (see the
+ * `force` option on Store.setConfidence/setConfNum — first-tap-wins is
+ * still the default for every other caller, it's only overridden on this
+ * toast's own re-pick path). The why-text and any tapped scale value
+ * survive the round trip unchanged; only a genuinely NEW toast (a different
+ * fp) resets them. If the backed-out choice was one of the two that
+ * auto-classify the miss's reason ('didnt-know' or 'slip' — see
+ * AUTO_REASON_BY_CONFIDENCE, Store.setReasonIfEmpty), moving to a different
+ * choice reverts or replaces that classification via
+ * Store.clearAutoReason/replaceAutoReason, guarded by this toast's own
+ * toastAutoReason flag (which reason, if any, THIS toast currently has
+ * standing) so a pre-existing or panel-set reason is never touched.
  *
  * The toast no longer dismisses on an outside click (that killed it mid-
  * flow every time the page itself was scrolled or read) — only [save],
@@ -342,8 +350,12 @@
       box-shadow: 0 14px 36px rgba(0,0,0,.35);
       /* Right padding leaves room for .x in the top-right corner without it
          overlapping button/label text — .toast's own fixed positioning is
-         already a valid containing block, so .x just needs absolute
-         positioning, no extra wrapper. */
+         already a valid containing block, so .x/.corner-back just need
+         absolute positioning, no extra wrapper. Left padding stays the
+         plain 16px here (not widened to match) — only STAGE 2 needs
+         corner clearance on the left for ←, since stage 1 has no button
+         there; see .stage2's own extra padding-left below instead of
+         indenting stage 1 unnecessarily too. */
       padding: 12px 32px 12px 16px; font-size: 14px;
       animation: cb-toast-in .26s cubic-bezier(.2,.9,.3,1.15);
     }
@@ -362,7 +374,11 @@
        Stage 1 stays a single row; stage 2 stacks the scale ABOVE its own
        input/save/skip row, so it's a column instead. */
     .stage1 { display: flex; align-items: center; gap: 10px; }
-    .stage2 { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+    /* Extra left inset (on top of .toast's own 16px) clears room for
+       .corner-back, nested inside #stage2 — see the markup — so it hides
+       for free whenever stage 2 does, no separate JS toggle needed. Stage 1
+       has no such button, so it isn't indented to match. */
+    .stage2 { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-left: 18px; }
     .stage1[hidden], .stage2[hidden] { display: none; }
     .stage2-row { display: flex; align-items: center; gap: 10px; }
 
@@ -432,29 +448,38 @@
     .details-link:hover { color: var(--toast-fg); }
     .details-link:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
 
-    /* Re-added close button (same muted styling this toast had pre-v0.15,
-       before outside-click dismiss briefly replaced it) — top-right via
-       absolute positioning now, since stage 2's column layout (scale +
-       input row) is taller than the single-row shape this button was
-       originally styled against. */
-    .x {
-      position: absolute; top: 6px; right: 6px;
+    /* Corner buttons: × (close, top-right — same muted styling this toast
+       had pre-v0.15, before outside-click dismiss briefly replaced it) and
+       .corner-back (← re-choose, top-left — its visual twin, stage-2 only).
+       Both absolutely positioned against .toast's own fixed positioning
+       (already a valid containing block, no extra wrapper needed) rather
+       than sitting in the normal flex flow, since stage 2's column layout
+       (scale + input row) is taller than the single-row shape × was
+       originally styled against. Shared min-width/height + flex-centering
+       gives both a consistent ~24px+ hit area regardless of how narrow
+       their glyph (← vs ×) renders. */
+    .x, .corner-back {
+      position: absolute; top: 6px;
       border: 0; background: transparent; color: var(--toast-muted); cursor: pointer;
       font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+      min-width: 24px; min-height: 24px;
+      display: flex; align-items: center; justify-content: center;
     }
-    .x:hover { color: var(--toast-fg); background: color-mix(in srgb, var(--toast-fg) 10%, transparent); }
-    .x:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
+    .x { right: 6px; }
+    .corner-back { left: 6px; }
+    .x:hover, .corner-back:hover { color: var(--toast-fg); background: color-mix(in srgb, var(--toast-fg) 10%, transparent); }
+    .x:focus-visible, .corner-back:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
   `;
 
-  const ALL_CONFIDENCE_VALS = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know'];
+  const ALL_CONFIDENCE_VALS = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know', 'slip'];
   const CONFIDENCE_VALUES = new Set(ALL_CONFIDENCE_VALS);
 
   // Per-dialect button config: order in the array IS the visual left-to-
   // right order (applied via style.order), `key` is the digit that selects
   // it while stage 1 is open. Replaces a static key->value table (see the
   // file-header comment) since the correct dialect's own key mapping was
-  // reshuffled independently of the wrong dialect's, and key 4 means a
-  // different value on each side.
+  // reshuffled independently of the wrong dialect's, and every key means a
+  // different value on each side (key 1 is 'memorized' vs 'slip', etc).
   const CORRECT_DIALECT = [
     { val: 'memorized', key: '1', label: 'memorized' },
     { val: 'knew', key: '2', label: 'knew it' },
@@ -462,12 +487,28 @@
     { val: 'narrowed', key: '4', label: 'between two' },
     { val: 'guessed', key: '5', label: 'guessed' }
   ];
+  // Ordered by descending actual-knowledge: a silly mistake (knew it, just
+  // slipped) means the most real knowledge, then was-sure (a misconception —
+  // confidently wrong), then between-two, then guessed, then didn't know at
+  // all (the least).
   const WRONG_DIALECT = [
-    { val: 'knew', key: '1', label: 'was sure' },
-    { val: 'narrowed', key: '2', label: 'between two' },
-    { val: 'guessed', key: '3', label: 'guessed' },
-    { val: 'didnt-know', key: '4', label: "didn't know" }
+    { val: 'slip', key: '1', label: 'silly mistake' },
+    { val: 'knew', key: '2', label: 'was sure' },
+    { val: 'narrowed', key: '3', label: 'between two' },
+    { val: 'guessed', key: '4', label: 'guessed' },
+    { val: 'didnt-know', key: '5', label: "didn't know" }
   ];
+
+  // Confidence values that ARE, in themselves, an explicit reason
+  // classification — choosing one auto-fills `reason` onto the
+  // auto-captured miss the instant it's picked (see chooseConfidence),
+  // instead of waiting for a debrief triage pass. Generalizes what used to
+  // be a didnt-know-only mechanism (see Store.setReasonIfEmpty/
+  // clearAutoReason/replaceAutoReason and the toastAutoReason flag below).
+  const AUTO_REASON_BY_CONFIDENCE = {
+    'didnt-know': 'never-learned',
+    slip: 'misread'
+  };
 
   // Stage-2 numeric scale: digit keys 1-9 map to themselves, 0 maps to 10.
   const SCALE_KEYS = { '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '0': 10 };
@@ -488,11 +529,17 @@
   // (2) showStage2() skips its input/scale reset on re-entry, so a mistap
   //     doesn't cost an already-typed sentence or an already-tapped number.
   let toastRepicked = false;
-  // True only while THIS toast's own setNeverLearnedByFp call is what's
-  // currently sitting in the miss's reason field — see chooseConfidence and
-  // Store.clearNeverLearnedByFp's doc comment for why this has to be a
-  // flag, not a value comparison against a pre-existing/panel-set reason.
-  let toastAutoReasonSetByToast = false;
+  // WHICH reason (if any) THIS toast's own setReasonIfEmpty/replaceAutoReason
+  // call currently has standing in the miss's reason field — null, or one of
+  // AUTO_REASON_BY_CONFIDENCE's values ('never-learned' | 'misread'). Not a
+  // plain boolean any more (was toastAutoReasonSetByToast pre-v0.16.2, back
+  // when 'didnt-know' was the only auto-classifying pick): with two such
+  // picks now, switching between them needs to know WHICH one is standing so
+  // it can replace it rather than just clear-or-not. See chooseConfidence and
+  // Store.clearAutoReason/replaceAutoReason's doc comments for why this has
+  // to be state the toast owns, not a value comparison against a
+  // pre-existing/panel-set reason.
+  let toastAutoReason = null;
 
   function buildToastHost() {
     const host = document.createElement('div');
@@ -514,9 +561,11 @@
             <button type="button" class="btn" data-val="memorized"><span class="lbl">memorized</span><span class="k">4</span></button>
             <button type="button" class="btn" data-val="intuition"><span class="lbl">intuition</span><span class="k">5</span></button>
             <button type="button" class="btn" data-val="didnt-know"><span class="lbl">didn't know</span><span class="k">4</span></button>
+            <button type="button" class="btn" data-val="slip"><span class="lbl">silly mistake</span><span class="k">1</span></button>
           </div>
         </div>
         <div class="stage2" id="stage2" hidden>
+          <button type="button" class="corner-back" id="stage2Back" aria-label="back" title="Back — re-choose">←</button>
           <div class="scale-wrap" id="scaleWrap">
             <div class="scale-label">how sure? (1–10)</div>
             <div class="scale" id="scale" tabindex="-1">
@@ -536,7 +585,6 @@
           <div class="stage2-row">
             <input type="text" id="stage2Input" class="stage2-input" autocomplete="off" spellcheck="false"
                    placeholder="why? didn't know… / not sure about…">
-            <button type="button" class="details-link" id="stage2Back">← back</button>
             <div class="btns">
               <button type="button" class="btn" id="stage2Save">save</button>
               <button type="button" class="btn" id="stage2Skip">skip</button>
@@ -649,7 +697,7 @@
     toastConfNum = null;
     toastStage = 1;
     toastRepicked = false;
-    toastAutoReasonSetByToast = false;
+    toastAutoReason = null;
 
     // Always (re-)enter on stage 1, buttons unflashed — a toast for a new
     // question reuses this same host/shadow, so a stage-2/flash/scale-
@@ -708,7 +756,7 @@
     toastConfNum = null;
     toastStage = 1;
     toastRepicked = false;
-    toastAutoReasonSetByToast = false;
+    toastAutoReason = null;
     if (toastEl) toastEl.hidden = true;
   }
 
@@ -744,39 +792,56 @@
     const setConfidenceDone = Store.setConfidence(fp, value, { force: toastRepicked }).catch((e) =>
       console.debug('[Cert Buddy] setConfidence failed', e)
     );
-    // "didn't know" (wrong-dialect only) IS the never-learned classification
-    // — fill it onto the auto-captured miss the moment it's picked, instead
-    // of waiting for a debrief triage pass. Chained after setConfidence's
-    // write settles (not fired in parallel): both read-mutate-write the
-    // same storage blob, and racing them risks one silently dropping the
-    // other's change on write. This doesn't delay the stage-2 morph below,
-    // which is scheduled independently.
-    if (value === 'didnt-know') {
-      // Skip the redundant call if THIS toast's own classification is
-      // already standing (re-picking 'didnt-know' straight after a back,
-      // with no different choice in between) — Store.setNeverLearnedByFp's
-      // own guard would otherwise see the reason it set earlier as already
+    // 'didnt-know' and 'slip' (wrong-dialect only) ARE explicit reason
+    // classifications in themselves — fill the mapped reason onto the
+    // auto-captured miss the moment one is picked, instead of waiting for a
+    // debrief triage pass (see AUTO_REASON_BY_CONFIDENCE above). Every Store
+    // call in this block is chained off setConfidenceDone (never fired in
+    // parallel with it, or with each other): they all read-mutate-write the
+    // same storage blob, and racing any two of them risks one silently
+    // dropping another's change on write. None of this delays the stage-2
+    // morph below, which is scheduled independently.
+    const newAutoReason = AUTO_REASON_BY_CONFIDENCE[value] || null;
+    if (newAutoReason && newAutoReason === toastAutoReason) {
+      // Re-picking the SAME auto-classifying value straight after a back,
+      // with no different choice in between — this toast's classification
+      // is already standing, nothing to redo. (Calling setReasonIfEmpty
+      // again here would see the reason it set earlier as already
       // non-empty, no-op, and incorrectly report "not mine" by returning
-      // null, which would wrongly clear toastAutoReasonSetByToast below.
-      if (!toastAutoReasonSetByToast) {
-        setConfidenceDone.then(() =>
-          Store.setNeverLearnedByFp(fp)
-            .then((m) => {
-              toastAutoReasonSetByToast = !!m;
-            })
-            .catch((e) => console.debug('[Cert Buddy] setNeverLearnedByFp failed', e))
-        );
-      }
-    } else if (toastAutoReasonSetByToast) {
-      // Moving AWAY from 'didnt-know' to something else reverts the
-      // auto-classification — but ONLY because the flag says THIS toast is
-      // what set it (see Store.clearNeverLearnedByFp's doc comment: a
-      // pre-existing or panel-set reason is never touched, and the flag —
-      // not a value comparison — is what tells the two apart).
-      toastAutoReasonSetByToast = false;
+      // null, which would wrongly clear toastAutoReason below.)
+    } else if (newAutoReason && toastAutoReason) {
+      // Switching from ONE of this toast's own auto-reasons to the OTHER
+      // (e.g. 'slip' -> back -> 'didnt-know') — replaceAutoReason
+      // overwrites unconditionally in one write, since setReasonIfEmpty's
+      // only-if-empty guard would otherwise refuse to write over the FIRST
+      // auto-reason this same toast already applied.
       setConfidenceDone.then(() =>
-        Store.clearNeverLearnedByFp(fp).catch((e) =>
-          console.debug('[Cert Buddy] clearNeverLearnedByFp failed', e)
+        Store.replaceAutoReason(fp, newAutoReason)
+          .then((m) => {
+            toastAutoReason = m ? newAutoReason : null;
+          })
+          .catch((e) => console.debug('[Cert Buddy] replaceAutoReason failed', e))
+      );
+    } else if (newAutoReason) {
+      // Nothing of this toast's own standing yet — plain only-if-empty
+      // write, so a pre-existing or panel-set reason is never touched.
+      setConfidenceDone.then(() =>
+        Store.setReasonIfEmpty(fp, newAutoReason)
+          .then((m) => {
+            toastAutoReason = m ? newAutoReason : null;
+          })
+          .catch((e) => console.debug('[Cert Buddy] setReasonIfEmpty failed', e))
+      );
+    } else if (toastAutoReason) {
+      // Moving AWAY from an auto-classifying pick to one that isn't (e.g.
+      // 'slip'/'didnt-know' -> 'guessed') reverts it — but ONLY because the
+      // flag says THIS toast is what set it (see Store.clearAutoReason's
+      // doc comment: a pre-existing or panel-set reason is never touched,
+      // and the flag — not a value comparison — is what tells them apart).
+      toastAutoReason = null;
+      setConfidenceDone.then(() =>
+        Store.clearAutoReason(fp).catch((e) =>
+          console.debug('[Cert Buddy] clearAutoReason failed', e)
         )
       );
     }
@@ -984,9 +1049,9 @@
           dismissToast();
           return;
         }
-        // Key meaning is dialect- AND position-dependent (key 4 is 'between
-        // two' on the correct dialect, 'didnt-know' on the wrong one) — see
-        // applyDialect above, which stamps each VISIBLE button with the
+        // Key meaning is dialect- AND position-dependent (key 1 is
+        // 'memorized' on the correct dialect, 'slip' on the wrong one) —
+        // see applyDialect above, which stamps each VISIBLE button with the
         // data-key it currently claims. A hidden button was stripped of its
         // data-key there, so it can never match here — the hidden-button
         // guard falls out for free instead of needing a separate check.

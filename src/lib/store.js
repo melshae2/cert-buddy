@@ -99,7 +99,7 @@
       // a quick-save) pass through untouched.
       triaged: m.triaged !== undefined ? !!m.triaged : !!(m.reason || m.fact),
       // 'knew' | 'narrowed' | 'guessed' | 'memorized' | 'intuition' |
-      // 'didnt-know' | null. Backfilled from the outcome toast (see
+      // 'didnt-know' | 'slip' | null. Backfilled from the outcome toast (see
       // addMiss) — records that predate confidence just get null.
       // Migration: the toast's second button used to be labeled/valued
       // 'unsure' — old records on disk still carry that literal string, so
@@ -255,7 +255,7 @@
    *                                 or reviewed later in the debrief)
    * @property {boolean} shaky      logged as "got it right" but only by guessing — counts like a
    *                                 miss for weak-area weighting
-   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know')} confidence
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know'|'slip')} confidence
    *                                 self-rated confidence, joined in from the matching Outcome by fp
    *                                 at capture time if not set explicitly. 'memorized' = high
    *                                 certainty, zero reasoning (pure answer-recognition on a reused
@@ -265,8 +265,10 @@
    *                                 same discount as 'memorized'; focusTopics/isStubborn key on the
    *                                 literal 'memorized' string only, so an 'intuition' right cools
    *                                 topics and graduates Stubborn questions same as any other right.
-   *                                 'didnt-know' = wrong-only, the toast's explicit "topic was
-   *                                 entirely foreign" pick (see Store.setNeverLearnedByFp).
+   *                                 'didnt-know' and 'slip' are wrong-only, both explicit reason
+   *                                 classifications in themselves ("topic was entirely foreign" / "knew
+   *                                 it, execution/attention slipped") — see
+   *                                 outcomes.js's AUTO_REASON_BY_CONFIDENCE and Store.setReasonIfEmpty.
    * @property {?number} confNum    self-rated numeric confidence, 1-10, from the toast's stage-2
    *                                 scale — independent of the `confidence` bucket above and
    *                                 collected on either outcome dialect. Same first-tap-wins join
@@ -290,8 +292,8 @@
    * @property {string} fp             fingerprint used to match repeats (same function as Miss.fp)
    * @property {string} questionSnippet  first 200 chars of the question text
    * @property {'correct'|'incorrect'} outcome
-   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know')} confidence  set
-   *                                 once via the toast, first tap wins
+   * @property {?('knew'|'narrowed'|'guessed'|'memorized'|'intuition'|'didnt-know'|'slip')} confidence
+   *                                 set once via the toast, first tap wins
    * @property {?number} confNum       self-rated numeric confidence, 1-10, from the toast's stage-2
    *                                 scale, set once, first tap wins — independent of `confidence`,
    *                                 collected on either outcome dialect
@@ -629,55 +631,80 @@
     },
 
     /**
-     * "didn't know" (the wrong-dialect confidence pick meaning "topic was
-     * entirely foreign, I knew I was blank") IS the never-learned
-     * classification — this fills it onto the auto-captured miss record for
-     * `fp` the instant the toast records that pick (see chooseConfidence in
-     * outcomes.js), instead of leaving it for a separate debrief triage
-     * pass. Only fills `reason` if it's currently empty — a reason already
-     * chosen (by a prior capture, or a manual tagger edit that landed
-     * first) is never overwritten. No-op if no miss with this fp exists yet
-     * (same limitation as setNotesByFp — nothing here depends on the
-     * auto-capture having already run, it just normally has by the time a
-     * user reaches this).
+     * Generic version of what used to be a didnt-know-only setter: certain
+     * wrong-dialect confidence picks ARE a reason classification in
+     * themselves ("didn't know" -> never-learned, "slip"/silly-mistake ->
+     * misread — see AUTO_REASON_BY_CONFIDENCE in outcomes.js) — this fills
+     * `reason` onto the auto-captured miss record for `fp` the instant the
+     * toast records such a pick (see chooseConfidence), instead of leaving
+     * it for a separate debrief triage pass. Only fills `reason` if it's
+     * currently empty — a reason already chosen (by a prior capture, or a
+     * manual tagger edit that landed first) is never overwritten. No-op if
+     * no miss with this fp exists yet (same limitation as setNotesByFp —
+     * nothing here depends on the auto-capture having already run, it just
+     * normally has by the time a user reaches this).
      *
      * Returning the miss on success (null on no-op) is load-bearing: the
      * toast uses truthiness of the return value — not a later re-read of
      * `reason` — to know whether ITS OWN pick is what just got applied, so
-     * it knows whether a later change-of-mind should call
-     * clearNeverLearnedByFp. See that function's own doc comment.
+     * it knows whether a later change-of-mind should call clearAutoReason /
+     * replaceAutoReason. See those functions' own doc comments.
      */
-    async setNeverLearnedByFp(fp) {
-      if (!fp) return null;
+    async setReasonIfEmpty(fp, reason) {
+      if (!fp || !reason) return null;
       const db = await read();
       const m = db.misses.find((x) => x.fp === fp);
       if (!m || m.reason) return null;
-      m.reason = 'never-learned';
+      m.reason = reason;
       m.triaged = true;
       await write(db);
       return m;
     },
 
     /**
-     * Reverts setNeverLearnedByFp's auto-classification: resets `reason` to
-     * '' and `triaged` to false on the miss record for `fp`. Call this ONLY
+     * Reverts setReasonIfEmpty's auto-classification: resets `reason` to ''
+     * and `triaged` to false on the miss record for `fp`. Call this ONLY
      * when the caller already knows — via its own state (outcomes.js's
-     * toastAutoReasonSetByToast flag), not by comparing the current value of
-     * `reason`) — that ITS earlier setNeverLearnedByFp call is what set the
+     * toastAutoReason flag), not by comparing the current value of
+     * `reason` — that ITS earlier setReasonIfEmpty call is what set the
      * reason. A value comparison can't tell "the toast set this" apart from
      * "a pre-existing or panel-set reason just happens to already read
-     * 'never-learned'" — which is exactly why this function performs the
-     * revert unconditionally (short of the record existing at all) instead
-     * of re-deriving its own guard from `reason`. No-op if no miss with this
-     * fp exists.
+     * 'never-learned'/'misread'" — which is exactly why this function
+     * performs the revert unconditionally (short of the record existing at
+     * all) instead of re-deriving its own guard from `reason`. No-op if no
+     * miss with this fp exists.
      */
-    async clearNeverLearnedByFp(fp) {
+    async clearAutoReason(fp) {
       if (!fp) return null;
       const db = await read();
       const m = db.misses.find((x) => x.fp === fp);
       if (!m) return null;
       m.reason = '';
       m.triaged = false;
+      await write(db);
+      return m;
+    },
+
+    /**
+     * Switches the miss record for `fp` from one of THIS toast's own
+     * auto-reasons to another (e.g. "silly mistake" -> back -> "didn't
+     * know") — a single read-write that overwrites `reason` unconditionally,
+     * unlike setReasonIfEmpty's only-if-empty guard, which would otherwise
+     * refuse to write over the FIRST auto-reason this same toast already
+     * applied. Only ever called while the toast's own toastAutoReason flag
+     * says a reason it wrote is what's currently standing — same
+     * flag-is-the-guard rule as clearAutoReason, so a panel-set or
+     * pre-existing reason is never reached by this path (chooseConfidence
+     * only calls it when toastAutoReason is already non-null). No-op if no
+     * miss with this fp exists.
+     */
+    async replaceAutoReason(fp, reason) {
+      if (!fp || !reason) return null;
+      const db = await read();
+      const m = db.misses.find((x) => x.fp === fp);
+      if (!m) return null;
+      m.reason = reason;
+      m.triaged = true;
       await write(db);
       return m;
     },

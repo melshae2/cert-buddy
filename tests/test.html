@@ -172,13 +172,15 @@
       "normalizeMiss: current confidence id 'memorized' passes through unchanged");
     assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: null }).confidence, null,
       'normalizeMiss: null confidence (never rated) stays null, not migrated to anything');
-    // 'intuition' (correct-only) and 'didnt-know' (wrong-only) are new
-    // enum values, never spelled anything else — plain passthrough, no
-    // migration table entry needed for either.
+    // 'intuition' (correct-only) and 'didnt-know'/'slip' (wrong-only) are
+    // new enum values, never spelled anything else — plain passthrough, no
+    // migration table entry needed for any of them.
     assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'intuition' }).confidence, 'intuition',
       "normalizeMiss: new confidence id 'intuition' passes through unchanged");
     assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'didnt-know' }).confidence, 'didnt-know',
       "normalizeMiss: new confidence id 'didnt-know' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, confidence: 'slip' }).confidence, 'slip',
+      "normalizeMiss: new confidence id 'slip' passes through unchanged");
 
     const baseOutcome = { id: 'migo1', fp: 'fpmigrationtest', outcome: 'correct', ts: 1700000000000, attempts: [1700000000000] };
     assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'unsure' }).confidence, 'narrowed',
@@ -191,6 +193,8 @@
       "normalizeOutcome: new confidence id 'intuition' passes through unchanged");
     assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'didnt-know' }).confidence, 'didnt-know',
       "normalizeOutcome: new confidence id 'didnt-know' passes through unchanged");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, confidence: 'slip' }).confidence, 'slip',
+      "normalizeOutcome: new confidence id 'slip' passes through unchanged");
   }
 
   // =====================================================================
