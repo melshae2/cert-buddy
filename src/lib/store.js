@@ -123,7 +123,14 @@
       // independent of (and addable alongside) the confidence bucket above.
       // Older records predate the field entirely — backfilled to null, no
       // migration table needed since it never had a different shape.
-      confNum: m.confNum ?? null
+      confNum: m.confNum ?? null,
+      // Which numbered question this was on a randomized bank ("Question 7
+      // of 75"), captured by Adapters.parseQuestionNumber at extraction
+      // time. Metadata only — NOT part of the fingerprint (numbering is
+      // session-local, see addMiss's own comment) — older records predate
+      // the field entirely, backfilled to null.
+      qnum: m.qnum ?? null,
+      qtotal: m.qtotal ?? null
     };
   }
 
@@ -144,6 +151,8 @@
       ...o,
       confidence,
       confNum: o.confNum ?? null,
+      qnum: o.qnum ?? null,
+      qtotal: o.qtotal ?? null,
       yourAnswers,
       correctAnswers,
       selectCount,
@@ -340,6 +349,15 @@
    *                                 ("select two"), else correctAnswers.length, else 1
    * @property {?{got:number,of:number}} partial  partial-credit result from Store.computePartial, or null
    *                                 when selectCount/correctAnswers.length <= 1 (nothing "partial" to show)
+   * @property {?number} qnum        which numbered question this was on the exam/bank ("Question 7 of 75"),
+   *                                 from Adapters.parseQuestionNumber at extraction time — metadata only,
+   *                                 deliberately excluded from the fingerprint (see fingerprint()'s own
+   *                                 comment and STEM_MARKER_RE in adapters.js): numbering is session-local
+   *                                 on a randomized bank, so a repeat sighting can carry a different number
+   *                                 than the first one did. addMiss's repeat-merge OVERWRITES this with the
+   *                                 newest non-null reading rather than first-fill-wins — see its own comment.
+   * @property {?number} qtotal      total question count from the same marker/heading, when stated; same
+   *                                 overwrite-with-newest rule as qnum
    *
    * NOTE on 'memorized' as a single-value field: once a fp is flagged
    * memorized (via an Outcome or an explicit tagger save), that flag doesn't
@@ -376,6 +394,9 @@
    *                                 ("select two"), else correctAnswers.length, else 1
    * @property {?{got:number,of:number}} partial  partial-credit result from Store.computePartial, or null
    *                                 when selectCount/correctAnswers.length <= 1 (nothing "partial" to show)
+   * @property {?number} qnum        same meaning and same overwrite-with-newest-non-null rule as Miss.qnum,
+   *                                 applied by logOutcome's own re-detection branch instead of addMiss's
+   * @property {?number} qtotal      same idea as Miss.qtotal
    */
 
   const Store = {
@@ -488,6 +509,17 @@
         if (partial.correctAnswers && partial.correctAnswers.length) existing.correctAnswers = partial.correctAnswers;
         if (partial.selectCount) existing.selectCount = partial.selectCount;
         existing.partial = computePartial(existing.yourAnswers, existing.correctAnswers, existing.selectCount);
+        // qnum/qtotal: numbering is SESSION-LOCAL on a randomized question
+        // bank — the same fp can carry a different number attempt-to-
+        // attempt, so unlike every field above (only overwritten when the
+        // new attempt actually brought something truthy), the latest
+        // sighting always wins outright, keeping the record in sync with
+        // where you most recently saw the question. Only a genuinely absent
+        // (null/undefined) reading leaves the prior value alone — an
+        // attempt whose extraction found no marker at all shouldn't blank
+        // out a number a previous attempt did find.
+        if (partial.qnum !== null && partial.qnum !== undefined) existing.qnum = partial.qnum;
+        if (partial.qtotal !== null && partial.qtotal !== undefined) existing.qtotal = partial.qtotal;
         // `shaky` describes the ORIGINAL capture, not every subsequent
         // attempt — a shaky log matching an existing record just adds an
         // attempt and leaves shaky as-is. A later attempt that's NOT shaky
@@ -545,6 +577,8 @@
         shaky: false,
         confidence: null,
         confNum: null,
+        qnum: null,
+        qtotal: null,
         ...partial,
         fp,
         attempts: [now]
@@ -638,7 +672,9 @@
       url,
       yourAnswers = [],
       correctAnswers = [],
-      selectCount
+      selectCount,
+      qnum = null,
+      qtotal = null
     } = {}) {
       if (!fp) return { record: null, deduped: false }; // never log unattributable outcomes
       const db = await read();
@@ -647,6 +683,12 @@
       const existing = db.outcomes.find((o) => o.fp === fp);
       if (existing) {
         existing.attempts = [...(existing.attempts || [existing.ts]), now];
+        // Same overwrite-with-newest-non-null rule as addMiss's repeat-merge
+        // (see its own comment) — numbering is session-local on a
+        // randomized bank, so a re-detection's fresher reading wins outright
+        // instead of being gated behind first-tap-wins like confidence/confNum.
+        if (qnum !== null && qnum !== undefined) existing.qnum = qnum;
+        if (qtotal !== null && qtotal !== undefined) existing.qtotal = qtotal;
         await write(db);
         return { record: existing, deduped: true };
       }
@@ -659,6 +701,8 @@
         outcome,
         confidence,
         confNum: null,
+        qnum,
+        qtotal,
         exam: exam || '',
         ts: now,
         attempts: [now],

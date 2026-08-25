@@ -607,6 +607,12 @@
         yourAnswers: (lastExtraction && lastExtraction.yourAnswers) || [],
         correctAnswers: (lastExtraction && lastExtraction.correctAnswers) || [],
         selectCount: (lastExtraction && lastExtraction.selectCount) || 1,
+        // Same "read from the extraction snapshot, not a hand-editable
+        // field" reasoning as yourAnswers/correctAnswers/selectCount above —
+        // there's no qnum/qtotal textarea to disagree with, but the snapshot
+        // is still the single source of truth for what the page showed.
+        qnum: (lastExtraction && lastExtraction.qnum) ?? null,
+        qtotal: (lastExtraction && lastExtraction.qtotal) ?? null,
         topics: [...topics],
         reason,
         notes: $('notes').value.trim(),

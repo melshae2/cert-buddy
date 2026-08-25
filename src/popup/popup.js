@@ -69,6 +69,12 @@
     return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
   };
 
+  /** "#7" or "#7/75" (when qtotal's known) — '' when qnum wasn't captured. */
+  const qnumPillHtml = (m) =>
+    m.qnum === null || m.qnum === undefined
+      ? ''
+      : `<span class="qnum-pill">#${esc(m.qnum)}${m.qtotal ? `/${esc(m.qtotal)}` : ''}</span>`;
+
   /** Shared auto-grow sizing for textareas that replace what used to be
    *  single-line inputs. Call on 'input' and once after setting .value
    *  programmatically. */
@@ -631,7 +637,7 @@
             m.confidence === 'memorized' ? '<span class="memorized-pill">memorized</span> ' : ''
           }${
             m.partial ? `<span class="partial-pill${m.partial.got === m.partial.of ? ' full' : ''}">${m.partial.got}/${m.partial.of}</span> ` : ''
-          }${esc(truncate(m.question, 70))}</span>
+          }${m.qnum !== null && m.qnum !== undefined ? `${qnumPillHtml(m)} ` : ''}${esc(truncate(m.question, 70))}</span>
           ${m.notes ? `<div class="debrief-note">“${esc(truncate(m.notes, 90))}”</div>` : ''}
           <div class="debrief-actions">
             <button class="link" data-act="triage" data-id="${esc(m.id)}">triage</button>
@@ -831,7 +837,7 @@
       m.confidence === 'memorized' ? `<span class="memorized-pill">memorized</span> · ` : ''
     }${
       m.partial ? `<span class="partial-pill${m.partial.got === m.partial.of ? ' full' : ''}">${m.partial.got}/${m.partial.of}</span> · ` : ''
-    }${fmtDate(m.ts)}</span>
+    }${m.qnum !== null && m.qnum !== undefined ? `${qnumPillHtml(m)} · ` : ''}${fmtDate(m.ts)}</span>
       </div>
       <div class="q clamp">${esc(m.question) || '<i>no question text</i>'}</div>
       <div class="ans">

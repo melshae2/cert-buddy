@@ -27,6 +27,57 @@
   // is stripped; "(Select two)" and everything else in the stem stays.
   const STEM_MARKER_RE = /^\s*(question|q)\s*\d+(\s*(of|\/)\s*\d+)?\s*[:.\-–—]*\s*/i;
 
+  // Same "question/q FIRST" shape as STEM_MARKER_RE above, but with the
+  // number (and optional "of M") CAPTURED instead of merely matched, so
+  // parseQuestionNumber (below) can report {qnum, qtotal} rather than just
+  // stripping the text. Keep this in lockstep with STEM_MARKER_RE's own
+  // shape — the two are meant to recognize the exact same marker prefixes.
+  const QNUM_MARKER_RE = /^\s*(?:question|q)\s*(\d+)(?:\s*(?:of|\/)\s*(\d+))?\s*[:.\-–—]*\s*/i;
+
+  // A second, unrelated marker shape some Tutorials Dojo (wpProQuiz) stems
+  // use: the DOM's own list index prepended ahead of the literal word
+  // "QUESTION" ("1. QUESTION: which service…") — NUMBER first this time, the
+  // mirror image of "Question N". STEM_MARKER_RE never covered this shape
+  // (it only strips a leading "question"/"q"), so it's never stripped from
+  // the stored question text — only parseQuestionNumber reads it, purely for
+  // the qnum metadata.
+  const QNUM_TD_MARKER_RE = /^\s*(\d+)\.\s*question\b/i;
+
+  // Fallback source when the stem itself carries no marker at all — e.g. a
+  // Udemy question-content block with a clean stem, while the PAGE's own
+  // heading spells out "Question 7 of 75" above it. Matched against whatever
+  // pageText the caller hands in (document.title + the first h1/h2's text).
+  const QNUM_HEADING_RE = /question\s+(\d+)\s+of\s+(\d+)/i;
+
+  /**
+   * Pure: which question number (and, when stated, how many total) a raw
+   * (pre-strip) stem or page heading names. qnum/qtotal are METADATA ONLY —
+   * never part of the fingerprint (see STEM_MARKER_RE's own comment: the
+   * same question's number changes on every randomized retake, so it must
+   * never leak into what gets hashed). Priority:
+   *   1. the stem's own leading marker, "question/q FIRST" shape
+   *      (QNUM_MARKER_RE — same shapes STEM_MARKER_RE strips: "Question
+   *      33:", "Question 14 of 65 —", "Q7.")
+   *   2. the stem's own leading marker, "number FIRST" TD shape
+   *      (QNUM_TD_MARKER_RE — "1. QUESTION: …")
+   *   3. `pageText` matching "question N of M" anywhere in it — the Udemy
+   *      exam-title case, where the stem itself carries no marker at all but
+   *      the page chrome above it does.
+   * Returns {qnum:null, qtotal:null} when nothing matches any of the above.
+   * Pure — no DOM access in here, callers hand in plain strings (see
+   * extract()'s own document.title/h1/h2 read below).
+   */
+  function parseQuestionNumber(rawStem, pageText) {
+    const stem = String(rawStem || '');
+    let m = stem.match(QNUM_MARKER_RE);
+    if (m) return { qnum: Number(m[1]), qtotal: m[2] ? Number(m[2]) : null };
+    m = stem.match(QNUM_TD_MARKER_RE);
+    if (m) return { qnum: Number(m[1]), qtotal: null };
+    m = String(pageText || '').match(QNUM_HEADING_RE);
+    if (m) return { qnum: Number(m[1]), qtotal: Number(m[2]) };
+    return { qnum: null, qtotal: null };
+  }
+
   const text = (el) => (el ? clean(el.innerText || el.textContent) : '');
 
   function labelTextFor(input) {
@@ -520,6 +571,7 @@
     detectExam,
     detectDiscriminator,
     computeSelectCount,
+    parseQuestionNumber,
     truncate,
     inNav, // exported so outcomes.js can reuse the same nav/sidebar/footer check
     adapters: ADAPTERS, // exposed so you can test one from the console
@@ -568,10 +620,23 @@
         if (i > -1) usedFallback.splice(i, 1);
       }
 
+      // qnum/qtotal capture happens on the PRE-strip merged text (plus, as a
+      // fallback, the page's own heading) — same "before the strip" moment
+      // STEM_MARKER_RE always ran at, just reading instead of discarding.
+      // The stored `question` field below still gets stripped exactly as
+      // before; qnum/qtotal never affect what's stripped or hashed.
+      const pageHeadingText = safe(
+        () => document.title + ' ' + text(document.querySelector('h1,h2')),
+        ''
+      );
+      const { qnum, qtotal } = parseQuestionNumber(merged.question, pageHeadingText);
+
       merged.question = merged.question.replace(STEM_MARKER_RE, '');
 
       return {
         ...merged,
+        qnum,
+        qtotal,
         disc: detectDiscriminator(merged.question),
         adapter:
           adapter.name +

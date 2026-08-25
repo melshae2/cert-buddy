@@ -182,7 +182,9 @@
       correctAnswers: data.correctAnswers,
       selectCount: data.selectCount,
       exam: data.exam,
-      url: location.href.slice(0, 500)
+      url: location.href.slice(0, 500),
+      qnum: data.qnum ?? null,
+      qtotal: data.qtotal ?? null
     })
       .then(({ record, deduped }) => {
         // Auto-capture runs on EVERY incorrect detection, deduped or not —
@@ -228,7 +230,9 @@
       topics: detected.apply,
       disc: data.disc,
       notes: '',
-      triaged: false
+      triaged: false,
+      qnum: data.qnum ?? null,
+      qtotal: data.qtotal ?? null
     }).catch((e) => console.debug('[Cert Buddy] auto-capture addMiss failed', e));
   }
 
@@ -1018,7 +1022,9 @@
           triaged: true,
           shaky: confidence === 'guessed',
           confidence,
-          confNum
+          confNum,
+          qnum: (data && data.qnum) ?? null,
+          qtotal: (data && data.qtotal) ?? null
         }).catch((e) => console.debug('[Cert Buddy] correct-capture addMiss failed', e))
       );
     }

@@ -376,6 +376,18 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+/* Question-number marker: plain positional metadata ("#7" or "#7/75"), not
+   a status/honesty flag like the pills above — muted-toned, same family as
+   memorized-pill, but its own class so it never reads as one of those
+   flags. --muted is themed for both light and dark already via :root. */
+.qnum-pill {
+  display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.5;
+  padding: 1px 7px; border-radius: 999px; color: var(--muted);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
 /* Discriminator tag: same shape as a topic chip, mono to read as "system
    metadata" rather than another topic. */
 .tagchip.disc-tag {

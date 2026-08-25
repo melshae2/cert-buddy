@@ -46,9 +46,9 @@
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js?v=1620"></script>
+<script src="../src/lib/store.js?v=1630"></script>
 <script src="../src/lib/taxonomy.js?v=1610"></script>
-<script src="../src/content/adapters.js?v=1611"></script>
+<script src="../src/content/adapters.js?v=1630"></script>
 <script>
 (function () {
   const results = [];
@@ -462,6 +462,54 @@
       'normalizeMiss: existing yourAnswers array is preserved, NOT re-split from an edited joined string');
     assertEqual(JSON.stringify(preserved.correctAnswers), JSON.stringify(['A', 'B']),
       'normalizeMiss: existing correctAnswers array is preserved, NOT re-split from an edited joined string');
+  }
+
+  // =====================================================================
+  group('parseQuestionNumber (adapters.js)');
+  // =====================================================================
+  {
+    const pqn = (stem, pageText) => JSON.stringify(Adapters.parseQuestionNumber(stem, pageText));
+
+    assertEqual(pqn('Question 33: Which service should you pick?', ''),
+      JSON.stringify({ qnum: 33, qtotal: null }),
+      "parseQuestionNumber: 'Question 33:' -> {qnum:33, qtotal:null}");
+
+    assertEqual(pqn('Question 14 of 65 — Which service should you pick?', ''),
+      JSON.stringify({ qnum: 14, qtotal: 65 }),
+      "parseQuestionNumber: 'Question 14 of 65 —' -> {qnum:14, qtotal:65}");
+
+    assertEqual(pqn('Q7. Which service should you pick?', ''),
+      JSON.stringify({ qnum: 7, qtotal: null }),
+      "parseQuestionNumber: 'Q7.' -> {qnum:7, qtotal:null}");
+
+    assertEqual(pqn('1. QUESTION: Which service should you pick?', ''),
+      JSON.stringify({ qnum: 1, qtotal: null }),
+      "parseQuestionNumber: TD-style '1. QUESTION …' -> {qnum:1, qtotal:null}");
+
+    // Heading fallback: the stem itself carries no marker, but pageText
+    // (document.title + first h1/h2, as extract() builds it) does.
+    assertEqual(
+      pqn(
+        'A team needs the solution with the least operational overhead.',
+        'Practice Exam Review | Udemy — AWS Certified Solutions Architect – Professional Practice Exams — Question 7 of 75'
+      ),
+      JSON.stringify({ qnum: 7, qtotal: 75 }),
+      'parseQuestionNumber: no stem marker -> falls back to "question N of M" in pageText -> {qnum:7, qtotal:75}'
+    );
+
+    // Priority: a stem marker wins over a heading fallback even when both
+    // are present and disagree.
+    assertEqual(
+      pqn('Question 5: Which service should you pick?', 'Practice Exam — Question 7 of 75'),
+      JSON.stringify({ qnum: 5, qtotal: null }),
+      'parseQuestionNumber: stem marker takes priority over a conflicting heading fallback'
+    );
+
+    assertEqual(
+      pqn('Which service should you pick? No number anywhere in this stem.', 'Just a plain page title with no number either.'),
+      JSON.stringify({ qnum: null, qtotal: null }),
+      'parseQuestionNumber: no marker in stem or pageText -> {qnum:null, qtotal:null}'
+    );
   }
 
   // =====================================================================
