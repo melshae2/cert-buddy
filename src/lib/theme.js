@@ -26,8 +26,10 @@
       --line: #e2e7e3;
       --fg: #14171a;
       --muted: #6b7480;
-      --accent: #149463;
+      --accent: #1b7af3;
       --accent-ink: #ffffff;
+      --ok: #149463;
+      --ok-ink: #ffffff;
       --danger: #c73f52;
       --warn: #b07a1e;
       --warn-ink: #ffffff;
@@ -41,8 +43,10 @@
         --line: #242b27;
         --fg: #e6e9ee;
         --muted: #98a1ad;
-        --accent: #3ddc97;
-        --accent-ink: #062018;
+        --accent: #6aabff;
+        --accent-ink: #071a33;
+        --ok: #3ddc97;
+        --ok-ink: #062018;
         --danger: #ff7b8a;
         --warn: #e8c37a;
         --warn-ink: #2b2210;

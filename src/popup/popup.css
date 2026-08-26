@@ -4,8 +4,10 @@
   --fg: #14171a;
   --muted: #6b7480;
   --line: #e2e7e3;
-  --accent: #149463;
+  --accent: #1b7af3;
   --accent-ink: #ffffff;
+  --ok: #149463;
+  --ok-ink: #ffffff;
   --danger: #c73f52;
   --warn: #b07a1e;
   --warn-ink: #ffffff;
@@ -36,8 +38,10 @@
     --fg: #e6e9ee;
     --muted: #98a1ad;
     --line: #242b27;
-    --accent: #3ddc97;
-    --accent-ink: #062018;
+    --accent: #6aabff;
+    --accent-ink: #071a33;
+    --ok: #3ddc97;
+    --ok-ink: #062018;
     --danger: #ff7b8a;
     --warn: #e8c37a;
     --warn-ink: #2b2210;
@@ -300,7 +304,7 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
 .card .q.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .card .ans { font-size: 12px; }
 .card .ans .wrong { color: var(--danger); }
-.card .ans .right { color: var(--accent); }
+.card .ans .right { color: var(--ok); }
 .card .note { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 4px; }
 .card .fact-line {
   font-size: 12px; margin-top: 4px; padding: 3px 7px; border-radius: 6px;
@@ -327,14 +331,14 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
-/* Rights marker: same pill shape, accent-toned — the good-news counterpart
-   to the repeat pill. */
+/* Rights marker: same pill shape, ok-toned (correct-answer green) — the
+   good-news counterpart to the repeat pill. */
 .rights-pill {
   display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.5;
-  padding: 1px 7px; border-radius: 999px; color: var(--accent);
+  padding: 1px 7px; border-radius: 999px; color: var(--ok);
   font-family: var(--mono); font-variant-numeric: tabular-nums;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 /* Guessed-right marker: same pill shape, warn-toned — flags a "right" that
@@ -362,7 +366,8 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
 
 /* Partial-credit marker: same pill shape as guessed/rights/memorized. Warn-
    toned by default (got < of, a short answer) — .full switches to
-   accent-toned when got === of, matching rights-pill's "good news" tone. */
+   ok-toned (correct-answer green) when got === of, matching rights-pill's
+   "good news" tone. */
 .partial-pill {
   display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.5;
   padding: 1px 7px; border-radius: 999px; color: var(--warn);
@@ -371,9 +376,9 @@ details[open] > .minihead::after { content: "\2212"; } /* minus sign */
   border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
 }
 .partial-pill.full {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 /* Question-number marker: plain positional metadata ("#7" or "#7/75"), not
@@ -520,7 +525,7 @@ main { padding: 12px 14px 18px; }
   position: relative; height: 10px; border-radius: 999px;
   background: var(--bg); border: 1px solid var(--line); overflow: hidden;
 }
-.calib-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.calib-fill { position: absolute; inset: 0 auto 0 0; background: var(--ok); }
 .calib-pct {
   font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11px;
   text-align: right; color: var(--fg);
@@ -541,7 +546,7 @@ main { padding: 12px 14px 18px; }
   position: relative; height: 10px; border-radius: 4px;
   background: var(--bg); border: 1px solid var(--line); overflow: hidden; display: flex;
 }
-.topic-correct { height: 100%; background: var(--accent); }
+.topic-correct { height: 100%; background: var(--ok); }
 .topic-incorrect { height: 100%; background: var(--danger); }
 .topic-n {
   font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 10.5px;

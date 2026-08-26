@@ -335,15 +335,15 @@
       --toast-bg: #171d1a;
       --toast-fg: #eef2ef;
       --toast-muted: #9fb0a7;
-      --toast-accent: #3ddc97;
-      --toast-accent-ink: #062018;
+      --toast-accent: #6aabff;
+      --toast-accent-ink: #071a33;
     }
     @media (prefers-color-scheme: dark) {
       :host {
         --toast-bg: #fafbf9;
         --toast-fg: #14171a;
         --toast-muted: #5c6a63;
-        --toast-accent: #149463;
+        --toast-accent: #1b7af3;
         --toast-accent-ink: #ffffff;
       }
     }

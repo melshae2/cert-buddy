@@ -30,7 +30,7 @@
 <body>
 <h1>cert-buddy — pure-function test harness</h1>
 <p class="hint">
-  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=1620, taxonomy.js and
+  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=1801, taxonomy.js and
   adapters.js directly. No seed data, no mock storage — every expected value below is
   either a literal computed from reading the source (migrateReason's table, detectWeighted's
   scoring/cap rules, sessionize's gap math, focusTopics' decay formula) or a deliberate
@@ -41,14 +41,14 @@
 
 <!-- Tiny inline chrome stub. The pure functions under test never touch
      storage — this exists only so nothing throws if that assumption is ever
-     wrong; store.js?v=1620's read()/write()/clearAll() (which DO use chrome.storage)
+     wrong; store.js?v=1801's read()/write()/clearAll() (which DO use chrome.storage)
      are never called by this harness. -->
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js?v=1630"></script>
-<script src="../src/lib/taxonomy.js?v=1610"></script>
-<script src="../src/content/adapters.js?v=1630"></script>
+<script src="../src/lib/store.js?v=1801"></script>
+<script src="../src/lib/taxonomy.js?v=1801"></script>
+<script src="../src/content/adapters.js?v=1801"></script>
 <script>
 (function () {
   const results = [];
@@ -78,7 +78,7 @@
   const Adapters = window.CertBuddyAdapters;
 
   // =====================================================================
-  group('fingerprint (store.js?v=161)');
+  group('fingerprint (store.js?v=1801)');
   // =====================================================================
   {
     const quickFox = 'The quick brown fox jumps over the lazy dog while studying for the exam diligently.';
@@ -119,11 +119,11 @@
   }
 
   // =====================================================================
-  group('migrateReason (store.js?v=161)');
+  group('migrateReason (store.js?v=1801)');
   // =====================================================================
   {
     // All 7 legacy ids from the pre-taxonomy-v2 7-bucket reason model,
-    // mapped per store.js?v=161's LEGACY_REASON_MAP.
+    // mapped per store.js?v=1801's LEGACY_REASON_MAP.
     const legacy = {
       'didnt-know': 'never-learned',
       'confused-two': 'never-learned',
@@ -149,7 +149,7 @@
   }
 
   // =====================================================================
-  group("confidence migration: 'unsure' -> 'narrowed' (store.js?v=161)");
+  group("confidence migration: 'unsure' -> 'narrowed' (store.js?v=1801)");
   // =====================================================================
   {
     // Minimal-but-valid fixtures — normalizeMiss reads m.ts (attempts
@@ -198,7 +198,7 @@
   }
 
   // =====================================================================
-  group('confNum (store.js?v=161)');
+  group('confNum (store.js?v=1801)');
   // =====================================================================
   {
     const baseMiss = {
@@ -245,7 +245,7 @@
   }
 
   // =====================================================================
-  group('sessionize (store.js?v=161)');
+  group('sessionize (store.js?v=1801)');
   // =====================================================================
   {
     const GAP_MS = 90 * 60 * 1000;
@@ -290,7 +290,7 @@
   }
 
   // =====================================================================
-  group('focusTopics (store.js?v=161)');
+  group('focusTopics (store.js?v=1801)');
   // =====================================================================
   {
     const NOW = 2000000000000;
@@ -417,7 +417,7 @@
   }
 
   // =====================================================================
-  group('multi-select array backfill via normalizeMiss (store.js?v=162)');
+  group('multi-select array backfill via normalizeMiss (store.js?v=1801)');
   // =====================================================================
   {
     const baseMiss = {
@@ -513,7 +513,7 @@
   }
 
   // =====================================================================
-  group('computePartial (store.js?v=162)');
+  group('computePartial (store.js?v=1801)');
   // =====================================================================
   {
     assertEqual(JSON.stringify(Store.computePartial(['A', 'B'], ['A', 'B'], 2)), JSON.stringify({ got: 2, of: 2 }),
