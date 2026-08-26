@@ -174,6 +174,12 @@
     }
     lastLogged = { fp, outcome, at: now };
 
+    // Measured ONCE here and shared with autoCaptureMiss below: that call
+    // runs in logOutcome's .then, by which point this same observer batch's
+    // trailing maybeNoteSighting may have stamped a banner-shifted fp
+    // (generic-adapter pages) — recomputing there turned an honest null
+    // into a false 0. One event, one measurement.
+    const seconds = computeSecondsSince(fp);
     Store.logOutcome({
       fp,
       questionSnippet: data.question,
@@ -184,7 +190,8 @@
       exam: data.exam,
       url: location.href.slice(0, 500),
       qnum: data.qnum ?? null,
-      qtotal: data.qtotal ?? null
+      qtotal: data.qtotal ?? null,
+      seconds
     })
       .then(({ record, deduped }) => {
         // Auto-capture runs on EVERY incorrect detection, deduped or not —
@@ -194,7 +201,7 @@
         // produced `fp` above is reused here so miss.fp === outcome.fp
         // always (addMiss recomputes fp from `data.question`, which is byte-
         // identical to what fingerprinted the outcome).
-        if (outcome === 'incorrect') autoCaptureMiss(data);
+        if (outcome === 'incorrect') autoCaptureMiss(data, seconds);
         if (!deduped && record) showToast(fp, outcome, data);
       })
       .catch((e) => console.debug('[Cert Buddy] logOutcome failed', e));
@@ -207,7 +214,7 @@
    * join-from-outcome fills it in from whatever the toast records next (or
    * from an outcome that already has one, on a repeat).
    */
-  function autoCaptureMiss(data) {
+  function autoCaptureMiss(data, seconds) {
     const detected = safe(
       () =>
         Tax.detectWeighted({
@@ -232,7 +239,10 @@
       notes: '',
       triaged: false,
       qnum: data.qnum ?? null,
-      qtotal: data.qtotal ?? null
+      qtotal: data.qtotal ?? null,
+      // Handed down from handleCandidate's single measurement — see the
+      // comment above its logOutcome call.
+      seconds
     }).catch((e) => console.debug('[Cert Buddy] auto-capture addMiss failed', e));
   }
 
@@ -300,9 +310,71 @@
     return outermost([...found.keys()]).map((el) => ({ el, outcome: found.get(el) }));
   }
 
+  /* ------------------------------------------------------------------ *
+   * Feature 3 (v0.19.0) — per-question timer                            *
+   *                                                                      *
+   * fp -> epoch ms of the first time this question's fp was SIGHTED (the *
+   * adapter reporting a question on screen — no banner/outcome needed).  *
+   * `seconds` (time spent on the question before its outcome/miss is     *
+   * recorded) is computed from this map at outcome-record creation and   *
+   * in autoCaptureMiss below, via computeSecondsSince(). v1 has no        *
+   * "un-sight" — a fp's first-seen stamp lives for the lifetime of this   *
+   * content-script instance (a fresh page load resets it), same-shaped    *
+   * accepted-limitation as the `lastLogged` dedupe var above.             *
+   * ------------------------------------------------------------------ */
+  const firstSeen = new Map();
+  let lastSightedFp = null;
+  let lastSightAt = 0;
+  const SIGHT_THROTTLE_MS = 1500; // matches THROTTLE_MS's role above — mutation storms fire often, sighting doesn't need to
+
+  /**
+   * Measured exactly once per outcome event, in handleCandidate just before
+   * its logOutcome call, and handed down to autoCaptureMiss so both records
+   * share one value (recomputing in the async .then re-read a map the same
+   * batch's sighting had since re-stamped). 3600s ceiling, 0s floor.
+   * Returns null when this fp was never sighted (or fp is falsy).
+   */
+  function computeSecondsSince(fp) {
+    if (!fp || !firstSeen.has(fp)) return null;
+    return Math.min(3600, Math.max(0, Math.round((Date.now() - firstSeen.get(fp)) / 1000)));
+  }
+
+  /**
+   * Runs the SAME adapter extraction + fingerprint derivation handleCandidate
+   * uses (no second fingerprint path) for whatever question is currently on
+   * screen, and stamps firstSeen the first time a given fp is noticed. Not
+   * throttled itself — callers gate that (see maybeNoteSighting below) so
+   * this stays cheap to call from a hot MutationObserver callback.
+   */
+  function noteSighting() {
+    const data = safe(() => Adapters.extract(), null);
+    const fp = data ? Store.fingerprint(data.question) : '';
+    if (fp && fp !== lastSightedFp && !firstSeen.has(fp)) {
+      firstSeen.set(fp, Date.now());
+    }
+    lastSightedFp = fp;
+  }
+
+  /** Throttle gate first (cheap escape for the common case — most mutation
+   *  batches fire well inside the window), so noteSighting's own adapter
+   *  extraction only actually runs at most once per SIGHT_THROTTLE_MS. */
+  function maybeNoteSighting() {
+    const now = Date.now();
+    if (now - lastSightAt < SIGHT_THROTTLE_MS) return;
+    lastSightAt = now;
+    noteSighting();
+  }
+
   const observer = new MutationObserver((mutations) => {
+    // Outcomes first, sighting after: on a page where the outcome banner's
+    // own arrival shifts the extracted question string (generic-adapter
+    // fallback pages), sighting-first would stamp the shifted fp in this
+    // same tick and hand its own outcome a false 0s — outcome-first makes
+    // that case an honest null instead. Stable-fp pages (both real site
+    // adapters) are order-indifferent: their fp is already stamped.
     for (const el of collectCandidates(mutations)) handleCandidate(el);
     for (const { el, outcome } of collectAttributeCandidates(mutations)) handleCandidate(el, outcome);
+    maybeNoteSighting();
   });
 
   function startObserving() {
@@ -313,6 +385,9 @@
         attributes: true,
         attributeFilter: ['style', 'class']
       });
+      // Once at script init too — covers landing mid-question, before any
+      // mutation has fired yet to trigger the observer-driven sighting above.
+      maybeNoteSighting();
     } else {
       document.addEventListener('DOMContentLoaded', startObserving, { once: true });
     }

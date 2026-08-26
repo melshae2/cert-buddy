@@ -837,7 +837,9 @@
       m.confidence === 'memorized' ? `<span class="memorized-pill">memorized</span> · ` : ''
     }${
       m.partial ? `<span class="partial-pill${m.partial.got === m.partial.of ? ' full' : ''}">${m.partial.got}/${m.partial.of}</span> · ` : ''
-    }${m.qnum !== null && m.qnum !== undefined ? `${qnumPillHtml(m)} · ` : ''}${fmtDate(m.ts)}</span>
+    }${m.qnum !== null && m.qnum !== undefined ? `${qnumPillHtml(m)} · ` : ''}${
+      Number.isFinite(m.seconds) ? `${esc(m.seconds)}s · ` : ''
+    }${fmtDate(m.ts)}</span>
       </div>
       <div class="q clamp">${esc(m.question) || '<i>no question text</i>'}</div>
       <div class="ans">

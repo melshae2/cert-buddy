@@ -51,28 +51,43 @@
 
   /**
    * Pure: which question number (and, when stated, how many total) a raw
-   * (pre-strip) stem or page heading names. qnum/qtotal are METADATA ONLY —
-   * never part of the fingerprint (see STEM_MARKER_RE's own comment: the
-   * same question's number changes on every randomized retake, so it must
-   * never leak into what gets hashed). Priority:
+   * (pre-strip) stem, a sibling qnumText snippet, or a page heading names.
+   * qnum/qtotal are METADATA ONLY — never part of the fingerprint (see
+   * STEM_MARKER_RE's own comment: the same question's number changes on
+   * every randomized retake, so it must never leak into what gets hashed).
+   * Priority:
    *   1. the stem's own leading marker, "question/q FIRST" shape
    *      (QNUM_MARKER_RE — same shapes STEM_MARKER_RE strips: "Question
    *      33:", "Question 14 of 65 —", "Q7.")
    *   2. the stem's own leading marker, "number FIRST" TD shape
    *      (QNUM_TD_MARKER_RE — "1. QUESTION: …")
-   *   3. `pageText` matching "question N of M" anywhere in it — the Udemy
+   *   3. `qnumText` — a sibling snippet an adapter hands in when the number
+   *      is rendered OUTSIDE the stem entirely (Tutorials Dojo's
+   *      .wpProQuiz_question_page div, a sibling of the stem element, not a
+   *      descendant of it — see tutorialsDojoAdapter.extract()'s own
+   *      out.qnumText). Tried against the same two stem-marker shapes, TD's
+   *      "number FIRST" one first, then the "question N of M" heading shape.
+   *   4. `pageText` matching "question N of M" anywhere in it — the Udemy
    *      exam-title case, where the stem itself carries no marker at all but
    *      the page chrome above it does.
    * Returns {qnum:null, qtotal:null} when nothing matches any of the above.
    * Pure — no DOM access in here, callers hand in plain strings (see
-   * extract()'s own document.title/h1/h2 read below).
+   * extract()'s own document.title/h1/h2 read below, and
+   * tutorialsDojoAdapter.extract()'s out.qnumText). qnumText is metadata
+   * input only, same rule as qnum/qtotal themselves — it must never be
+   * merged into a stored `question` and never reaches fingerprint().
    */
-  function parseQuestionNumber(rawStem, pageText) {
+  function parseQuestionNumber(rawStem, pageText, qnumText) {
     const stem = String(rawStem || '');
     let m = stem.match(QNUM_MARKER_RE);
     if (m) return { qnum: Number(m[1]), qtotal: m[2] ? Number(m[2]) : null };
     m = stem.match(QNUM_TD_MARKER_RE);
     if (m) return { qnum: Number(m[1]), qtotal: null };
+    const qt = String(qnumText || '');
+    m = qt.match(QNUM_TD_MARKER_RE);
+    if (m) return { qnum: Number(m[1]), qtotal: null };
+    m = qt.match(QNUM_HEADING_RE);
+    if (m) return { qnum: Number(m[1]), qtotal: Number(m[2]) };
     m = String(pageText || '').match(QNUM_HEADING_RE);
     if (m) return { qnum: Number(m[1]), qtotal: Number(m[2]) };
     return { qnum: null, qtotal: null };
@@ -142,20 +157,33 @@
   }
 
   /**
-   * How many options a question wants picked. Parses "select two/three/four"
-   * (or the numeral) out of the stem; falls back to how many correct answers
-   * were actually found (a real multi-select signal even with no explicit
-   * "select N" wording); defaults to 1 (plain single-select).
+   * How many options a question wants picked. Parses "select/choose/pick
+   * two/three/four" (or the numeral) out of the stem; falls back to how many
+   * correct answers were actually found (a real multi-select signal even
+   * with no explicit "select N" wording); defaults to 1 (plain
+   * single-select).
+   *
+   * `inputType` (optional, 'checkbox' | 'radio' | null/undefined — see
+   * tutorialsDojoAdapter.extract()'s out.inputType) is consulted ONLY when
+   * the stem regex above missed AND correctAnswers.length <= 1: a real
+   * checkbox input on the page is itself a multi-select signal even before
+   * the correct answer is revealed (Tutorials Dojo review pages sometimes
+   * show a checkbox question with only one correct option checked so far).
+   * 2 is the floor, not a guess at the true count — the true count is
+   * unknown until reveal, but a floor of 2 beats a false 1. Omitted/absent
+   * inputType reproduces the pre-existing behavior exactly.
    */
-  function computeSelectCount(stem, correctAnswers) {
-    const m = String(stem || '').match(/select\s+(two|three|four|2|3|4)/i);
+  function computeSelectCount(stem, correctAnswers, inputType) {
+    const m = String(stem || '').match(/(?:select|choose|pick)\s+(two|three|four|2|3|4)/i);
     if (m) {
       const WORD_TO_N = { two: 2, three: 3, four: 4 };
       const raw = m[1].toLowerCase();
       return WORD_TO_N[raw] || Number(raw);
     }
     const corrects = Array.isArray(correctAnswers) ? correctAnswers : [];
-    return corrects.length > 1 ? corrects.length : 1;
+    if (corrects.length > 1) return corrects.length;
+    if (inputType === 'checkbox') return 2;
+    return 1;
   }
 
   /** First selector in the list that matches anything. */
@@ -391,8 +419,14 @@
     // field this adapter couldn't resolve than to have extract() backfill it
     // from the wrong question. See extract()'s use of this flag below.
     noGenericBackfill: true,
+    // The force-flag half mirrors outcomes.js's IS_TUTORIALS_DOJO gate: only
+    // the td.html fixture ever sets it, so the harness exercises this adapter
+    // through the central extract() path instead of falling to genericAdapter
+    // (which is what harness runs silently did before v0.19.0).
     match: (loc) =>
-      loc.hostname === 'portal.tutorialsdojo.com' || loc.hostname.endsWith('.tutorialsdojo.com'),
+      loc.hostname === 'portal.tutorialsdojo.com' ||
+      loc.hostname.endsWith('.tutorialsdojo.com') ||
+      !!globalThis.__certBuddyForceTutorialsDojo,
     extract() {
       const out = { question: '', yourAnswer: '', correctAnswer: '', yourAnswers: [], correctAnswers: [] };
       const block = tdVisibleBlock();
@@ -412,9 +446,11 @@
       const options = [...block.querySelectorAll('li.wpProQuiz_questionListItem')].filter(isVisible);
       const yours = [];
       const right = [];
+      const inputs = [];
       for (const li of options) {
         const input = li.querySelector('.wpProQuiz_questionInput');
         const label = labelTextFor(input) || text(li);
+        if (input) inputs.push(input);
         if (!label) continue;
         if (input && input.checked) yours.push(label);
         if (li.classList.contains('wpProQuiz_answerCorrect')) right.push(label);
@@ -427,6 +463,31 @@
       // guessed at from elsewhere on the page.
       out.correctAnswer = right.join(' | ');
       out.correctAnswers = right;
+
+      // Real radio/checkbox inputs (see this adapter's own file-header
+      // comment) — a checkbox input is itself a multi-select signal even
+      // before any option is marked correct, consulted by
+      // computeSelectCount's own inputType fallback at the central
+      // extract() call site below. Computation input only — never stored on
+      // a record. Other adapters (Udemy's options aren't form inputs at all)
+      // leave this unset.
+      out.inputType = inputs.some((i) => i.type === 'checkbox' && isVisible(i))
+        ? 'checkbox'
+        : inputs.some((i) => i.type === 'radio' && isVisible(i))
+        ? 'radio'
+        : null;
+
+      // The question number, when TD renders it OUTSIDE the stem entirely —
+      // a SIBLING of .wpProQuiz_question_text, not a descendant (same
+      // sibling relationship as the Category line above), so the stem read
+      // above never sees it. Two known wpProQuiz markup variants: a
+      // .wpProQuiz_question_page div ("Question 19 of 65" / "19. Question"),
+      // or, failing that, a heading inside the block. First non-empty
+      // candidate wins; '' when neither is present. Metadata input only —
+      // see parseQuestionNumber's own doc comment: never merged into
+      // out.question, never reaches fingerprint().
+      const qPage = text(block.querySelector('.wpProQuiz_question_page'));
+      out.qnumText = qPage || text(block.querySelector('h1,h2,h3,h4,h5,h6'));
 
       return out;
     }
@@ -629,7 +690,19 @@
         () => document.title + ' ' + text(document.querySelector('h1,h2')),
         ''
       );
-      const { qnum, qtotal } = parseQuestionNumber(merged.question, pageHeadingText);
+      // qnumText: a sibling snippet the matched adapter hands in via its own
+      // out.qnumText (currently only tutorialsDojoAdapter — see its own
+      // extract()) when the question number lives OUTSIDE the stem entirely.
+      // Read straight off `data` (never `fallback` — the generic adapter
+      // never sets it), tolerating adapters that never set it at all
+      // (undefined -> ''). Passed to parseQuestionNumber as metadata input
+      // only: it's never merged into merged.question above, never folded
+      // into `merged` itself, and never appears on the object this function
+      // returns below — so it can never reach fingerprint() or land on a
+      // stored record. See parseQuestionNumber's own doc comment for the
+      // full priority order this participates in.
+      const qnumText = data.qnumText || '';
+      const { qnum, qtotal } = parseQuestionNumber(merged.question, pageHeadingText, qnumText);
 
       merged.question = merged.question.replace(STEM_MARKER_RE, '');
 
@@ -643,7 +716,13 @@
           (selected ? ' +selection(question)' : '') +
           (usedFallback.length ? ` +generic(${usedFallback.join(',')})` : ''),
         exam: detectExam(document.title + ' ' + document.body.innerText.slice(0, 4000)),
-        selectCount: computeSelectCount(merged.question, merged.correctAnswers)
+        // inputType: same "read straight off data, tolerate adapters that
+        // never set it" rule as qnumText above (currently only TD — see its
+        // out.inputType) — computeSelectCount only consults it as a
+        // last-resort floor when the stem has no "select N" wording AND
+        // correctAnswers.length <= 1. Also never appears on this returned
+        // object — computation input only, not stored on any record.
+        selectCount: computeSelectCount(merged.question, merged.correctAnswers, data.inputType || null)
       };
     }
   };

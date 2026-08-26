@@ -130,7 +130,9 @@
       // session-local, see addMiss's own comment) — older records predate
       // the field entirely, backfilled to null.
       qnum: m.qnum ?? null,
-      qtotal: m.qtotal ?? null
+      qtotal: m.qtotal ?? null,
+      // Per-question timer, v0.19.0; legacy records null.
+      seconds: Number.isFinite(m.seconds) ? m.seconds : null
     };
   }
 
@@ -153,6 +155,8 @@
       confNum: o.confNum ?? null,
       qnum: o.qnum ?? null,
       qtotal: o.qtotal ?? null,
+      // Per-question timer, v0.19.0; legacy records null.
+      seconds: Number.isFinite(o.seconds) ? o.seconds : null,
       yourAnswers,
       correctAnswers,
       selectCount,
@@ -358,6 +362,10 @@
    *                                 newest non-null reading rather than first-fill-wins — see its own comment.
    * @property {?number} qtotal      total question count from the same marker/heading, when stated; same
    *                                 overwrite-with-newest rule as qnum
+   * @property {?number} seconds     per-question timer, v0.19.0 — integer seconds spent on the question
+   *                                 before this outcome/miss was recorded (outcomes.js's firstSeen sighting
+   *                                 map, clamped 0..3600), or null when the sighting was never captured
+   *                                 (legacy records, or a manual tagger save with no passive sighting)
    *
    * NOTE on 'memorized' as a single-value field: once a fp is flagged
    * memorized (via an Outcome or an explicit tagger save), that flag doesn't
@@ -397,6 +405,9 @@
    * @property {?number} qnum        same meaning and same overwrite-with-newest-non-null rule as Miss.qnum,
    *                                 applied by logOutcome's own re-detection branch instead of addMiss's
    * @property {?number} qtotal      same idea as Miss.qtotal
+   * @property {?number} seconds     same meaning as Miss.seconds — set once at creation (logOutcome's
+   *                                 re-detection branch never revises it; a re-detection is a re-read, not
+   *                                 a new timing window)
    */
 
   const Store = {
@@ -579,6 +590,7 @@
         confNum: null,
         qnum: null,
         qtotal: null,
+        seconds: null,
         ...partial,
         fp,
         attempts: [now]
@@ -674,7 +686,12 @@
       correctAnswers = [],
       selectCount,
       qnum = null,
-      qtotal = null
+      qtotal = null,
+      // Per-question timer, v0.19.0 — computed by outcomes.js's
+      // computeSecondsSince and destructured here explicitly (this is a real
+      // whitelist, unlike addMiss's `...partial` spread) so it isn't
+      // silently dropped on the way into a NEW outcome record below.
+      seconds = null
     } = {}) {
       if (!fp) return { record: null, deduped: false }; // never log unattributable outcomes
       const db = await read();
@@ -703,6 +720,7 @@
         confNum: null,
         qnum,
         qtotal,
+        seconds,
         exam: exam || '',
         ts: now,
         attempts: [now],
