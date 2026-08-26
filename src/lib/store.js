@@ -119,6 +119,10 @@
       // it's mapped to the current 'narrowed' here on every read instead of
       // being rewritten in storage.
       confidence: m.confidence === 'unsure' ? 'narrowed' : (m.confidence ?? null),
+      // Which regime this record's confidence was captured under — 'pre'
+      // (submit-gate toast, v0.20.0) or 'post' (today's after-reveal
+      // toast). Legacy records and never-rated records both get null.
+      confAt: m.confAt === 'pre' || m.confAt === 'post' ? m.confAt : null,
       // Numeric 1-10 self-rating from the same toast's stage-2 scale,
       // independent of (and addable alongside) the confidence bucket above.
       // Older records predate the field entirely — backfilled to null, no
@@ -152,6 +156,8 @@
     return {
       ...o,
       confidence,
+      // Same confAt semantics as normalizeMiss above (v0.20.0; legacy null).
+      confAt: o.confAt === 'pre' || o.confAt === 'post' ? o.confAt : null,
       confNum: o.confNum ?? null,
       qnum: o.qnum ?? null,
       qtotal: o.qtotal ?? null,
@@ -176,6 +182,7 @@
     const outcome = db.outcomes.find((o) => o.fp === record.fp);
     if (outcome && outcome.confidence !== null && outcome.confidence !== undefined) {
       record.confidence = outcome.confidence;
+      if (outcome.confAt === 'pre' || outcome.confAt === 'post') record.confAt = outcome.confAt;
     }
   }
 
@@ -345,6 +352,10 @@
    *                                 scale — independent of the `confidence` bucket above and
    *                                 collected on either outcome dialect. Same first-tap-wins join
    *                                 rule as confidence (see Store.setConfNum / joinConfNumFromOutcome).
+   * @property {?('pre'|'post')} confAt  which regime `confidence` was captured under, v0.20.0 — 'pre'
+   *                                 (submit-gate toast) or 'post' (today's after-reveal toast); null
+   *                                 for legacy/never-rated records. Joined alongside confidence only
+   *                                 (see joinConfidenceFromOutcome), never independently.
    * @property {string[]} yourAnswers     every option you picked, as an array (multi-select aware) —
    *                                 the joined `yourAnswer` string stays for back-compat, this is the
    *                                 array it was built from (or a split-backfill of it for legacy records)
@@ -390,6 +401,8 @@
    * @property {?number} confNum       self-rated numeric confidence, 1-10, from the toast's stage-2
    *                                 scale, set once, first tap wins — independent of `confidence`,
    *                                 collected on either outcome dialect
+   * @property {?('pre'|'post')} confAt  same meaning as Miss.confAt, v0.20.0 — which regime `confidence`
+   *                                 was captured under; null for legacy/never-rated records
    * @property {string} exam
    * @property {number} ts             epoch ms of the first detection
    * @property {number[]} attempts     every time this outcome was (re-)detected
@@ -547,6 +560,7 @@
         if (existing.confidence === null || existing.confidence === undefined) {
           if (partial.confidence !== null && partial.confidence !== undefined) {
             existing.confidence = partial.confidence;
+            if (partial.confAt === 'pre' || partial.confAt === 'post') existing.confAt = partial.confAt;
           } else {
             joinConfidenceFromOutcome(existing, db);
           }
@@ -588,6 +602,7 @@
         shaky: false,
         confidence: null,
         confNum: null,
+        confAt: null,
         qnum: null,
         qtotal: null,
         seconds: null,
@@ -680,6 +695,12 @@
       questionSnippet,
       outcome,
       confidence = null,
+      // v0.20.0: accepted directly so a pre-submit-gate rating (see
+      // outcomes.js) can be written into a FRESH outcome record at
+      // creation time, instead of only ever being filled in later via
+      // setConfidence/setConfNum's first-tap-wins join.
+      confNum = null,
+      confAt = null,
       exam,
       url,
       yourAnswers = [],
@@ -717,7 +738,8 @@
         questionSnippet: String(questionSnippet || '').slice(0, 200),
         outcome,
         confidence,
-        confNum: null,
+        confNum,
+        confAt,
         qnum,
         qtotal,
         seconds,
@@ -746,21 +768,26 @@
      * plain first-wins, which stopped being acceptable once there were 5
      * reshuffled buttons to fat-finger) — every other caller keeps calling
      * this with no third argument, so the default stays first-wins and
-     * nothing about their behavior changes.
+     * nothing about their behavior changes. `confAt` (v0.20.0, optional):
+     * 'pre' | 'post', stamped onto whichever side(s) this call actually
+     * writes confidence to — omitted by every caller except outcomes.js's
+     * own post-toast confirm, which passes 'post'.
      */
-    async setConfidence(fp, confidence, { force = false } = {}) {
+    async setConfidence(fp, confidence, { force = false, confAt = null } = {}) {
       if (!fp) return { outcome: null, missesUpdated: 0 };
       const db = await read();
 
       const outcome = db.outcomes.find((o) => o.fp === fp) || null;
       if (outcome && (force || outcome.confidence === null || outcome.confidence === undefined)) {
         outcome.confidence = confidence;
+        if (confAt === 'pre' || confAt === 'post') outcome.confAt = confAt;
       }
 
       let missesUpdated = 0;
       for (const m of db.misses) {
         if (m.fp === fp && (force || m.confidence === null || m.confidence === undefined)) {
           m.confidence = confidence;
+          if (confAt === 'pre' || confAt === 'post') m.confAt = confAt;
           missesUpdated++;
         }
       }

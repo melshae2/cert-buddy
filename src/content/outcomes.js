@@ -159,13 +159,25 @@
    * function re-deriving one from banner text that may not even say
    * "correct"/"incorrect" for that markup.
    */
+  /**
+   * Runs the SAME Adapters.extract() + Store.fingerprint(question)
+   * derivation handleCandidate has always used for "what question is on
+   * screen, and its fp" — factored out (v0.20.0) so the submit gate below,
+   * which needs the identical derivation to decide whether to engage,
+   * can't drift from it.
+   */
+  function extractCurrentQuestionFp() {
+    const data = safe(() => Adapters.extract(), null);
+    const fp = data ? Store.fingerprint(data.question) : '';
+    return { data, fp };
+  }
+
   function handleCandidate(el, forcedOutcome) {
     const t = safe(() => (el.innerText || el.textContent || '').trim(), '');
     const outcome = forcedOutcome || (/^correct/i.test(t) ? 'correct' : 'incorrect');
 
-    const data = safe(() => Adapters.extract(), null);
+    const { data, fp } = extractCurrentQuestionFp();
     if (!data) return;
-    const fp = Store.fingerprint(data.question);
     if (!fp) return; // never log an outcome we can't attribute to a question
 
     const now = Date.now();
@@ -174,16 +186,32 @@
     }
     lastLogged = { fp, outcome, at: now };
 
-    // Measured ONCE here and shared with autoCaptureMiss below: that call
-    // runs in logOutcome's .then, by which point this same observer batch's
-    // trailing maybeNoteSighting may have stamped a banner-shifted fp
-    // (generic-adapter pages) — recomputing there turned an honest null
-    // into a false 0. One event, one measurement.
-    const seconds = computeSecondsSince(fp);
+    // Measured ONCE here and shared with autoCaptureMiss below — same
+    // reasoning as before v0.20.0 (banner-shifted fp on generic-adapter
+    // pages makes a later recompute unreliable). v0.20.0: a fp with a
+    // pending pre-submit rating overrides this with the snapshot taken at
+    // submit-click time instead — see `pending` below; `measuredSeconds` is
+    // still computed unconditionally as the fallback for when that
+    // snapshot isn't a finite number.
+    const measuredSeconds = computeSecondsSince(fp);
+
+    // v0.20.0 — outcome join: a pending pre-submit rating for this exact fp
+    // (see the submit gate section below) makes this outcome a genuine
+    // PREDICTION rather than a postdiction. Consumed (deleted) once the
+    // logOutcome().then() below confirms a fresh (non-deduped) record.
+    const pending = pendingPre.get(fp) || null;
+    const confAt = pending ? 'pre' : null;
+    const seconds = pending && Number.isFinite(pending.secondsAtSubmit) ? pending.secondsAtSubmit : measuredSeconds;
+    const confidence = pending ? pending.confidence : null;
+    const confNum = pending ? pending.confNum : null;
+
     Store.logOutcome({
       fp,
       questionSnippet: data.question,
       outcome,
+      confidence,
+      confNum,
+      confAt,
       yourAnswers: data.yourAnswers,
       correctAnswers: data.correctAnswers,
       selectCount: data.selectCount,
@@ -194,15 +222,25 @@
       seconds
     })
       .then(({ record, deduped }) => {
-        // Auto-capture runs on EVERY incorrect detection, deduped or not —
-        // a deduped re-detection still needs to append an attempt onto the
-        // existing miss record (addMiss's own fp-merge handles that), it
-        // just doesn't get a fresh toast. Same `data` extraction that
-        // produced `fp` above is reused here so miss.fp === outcome.fp
-        // always (addMiss recomputes fp from `data.question`, which is byte-
-        // identical to what fingerprinted the outcome).
-        if (outcome === 'incorrect') autoCaptureMiss(data, seconds);
-        if (!deduped && record) showToast(fp, outcome, data);
+        if (outcome === 'incorrect') autoCaptureMiss(data, seconds, pending, confAt);
+        if (deduped) {
+          // A pending entry surviving on an fp that already had an outcome
+          // logged shouldn't happen in normal flow (the gate marks a fp
+          // "handled" the instant it resolves, before any outcome could
+          // exist yet) — but don't let it leak or apply to a later
+          // re-detection if it somehow does.
+          pendingPre.delete(fp);
+          return;
+        }
+        if (!record) return;
+        pendingPre.delete(fp); // consumed — the join above already used it
+        if (pending) {
+          // Pre-rating present: correct gets no toast at all (the rating
+          // is already recorded); incorrect gets the slim toast.
+          if (outcome === 'incorrect') showSlimToast(fp);
+        } else {
+          showToast(fp, outcome, data); // today's full two-stage flow, confAt:'post'
+        }
       })
       .catch((e) => console.debug('[Cert Buddy] logOutcome failed', e));
   }
@@ -210,11 +248,15 @@
   /**
    * Auto-creates (or, via addMiss's existing fp-merge, appends an attempt
    * onto) the miss record for an incorrect outcome — no tagger interaction
-   * required. Confidence is deliberately left unset here: addMiss's own
-   * join-from-outcome fills it in from whatever the toast records next (or
-   * from an outcome that already has one, on a repeat).
+   * required. `pending`/`confAt` (v0.20.0): when a pre-submit rating exists
+   * for this fp, its confidence/confNum are passed straight through here
+   * (same `pending` handleCandidate already read for the logOutcome call
+   * this follows) instead of being left for addMiss's join-from-outcome to
+   * fill in later. With no pending entry, confidence/confNum/confAt stay
+   * unset exactly as before v0.20.0 — addMiss's join-from-outcome fills
+   * confidence in from whatever the (still today's-flow) toast records next.
    */
-  function autoCaptureMiss(data, seconds) {
+  function autoCaptureMiss(data, seconds, pending, confAt) {
     const detected = safe(
       () =>
         Tax.detectWeighted({
@@ -242,8 +284,24 @@
       qtotal: data.qtotal ?? null,
       // Handed down from handleCandidate's single measurement — see the
       // comment above its logOutcome call.
-      seconds
-    }).catch((e) => console.debug('[Cert Buddy] auto-capture addMiss failed', e));
+      seconds,
+      confidence: pending ? pending.confidence : null,
+      confNum: pending ? pending.confNum : null,
+      confAt: pending ? confAt : null
+    })
+      .then(({ miss }) => {
+        // Pre-rated 'didnt-know' keeps the same auto-classification the
+        // post-outcome toast's AUTO_REASON_BY_CONFIDENCE path would have
+        // applied — that path is skipped entirely when a pre-rating exists
+        // (the gate replaces stage 1), so it's applied here at the join
+        // instead. 'slip' is unreachable pre-submit (postdictive by nature),
+        // so 'didnt-know' -> 'never-learned' is the only mapping that can
+        // apply; setReasonIfEmpty keeps panel-set reasons untouchable.
+        if (pending && pending.confidence === 'didnt-know' && miss && miss.fp) {
+          return Store.setReasonIfEmpty(miss.fp, AUTO_REASON_BY_CONFIDENCE['didnt-know']);
+        }
+      })
+      .catch((e) => console.debug('[Cert Buddy] auto-capture addMiss failed', e));
   }
 
   /**
@@ -467,6 +525,15 @@
     .stage1[hidden], .stage2[hidden] { display: none; }
     .stage2-row { display: flex; align-items: center; gap: 10px; }
 
+    /* v0.20.0 pre-submit gate toast body — flex-column like .stage2, minus
+       its padding-left (no corner-back button here to clear room for). */
+    .gate { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+    /* Six labeled mechanism buttons make this the widest toast variant —
+       cap it to the viewport and let the button row wrap instead of
+       spilling past the left screen edge on narrow windows. */
+    #toastGate { max-width: min(94vw, 720px); }
+    #toastGate .btns { flex-wrap: wrap; }
+
     .label {
       font-family: var(--mono); font-size: 12.5px; color: var(--toast-fg);
       white-space: nowrap; letter-spacing: .01em; font-weight: 600;
@@ -678,6 +745,51 @@
           </div>
         </div>
         <button type="button" class="x" id="toastX" title="Close — anything already recorded stays">×</button>
+      </div>
+      <div class="toast" id="toastGate" hidden role="status" aria-live="polite">
+        <div class="gate" id="gateBody">
+          <span class="label">how sure?</span>
+          <div class="btns" id="gateBtns">
+            <button type="button" class="btn" data-val="memorized" data-key="1"><span class="lbl">memorized</span><span class="k">1</span></button>
+            <button type="button" class="btn" data-val="knew" data-key="2"><span class="lbl">know it</span><span class="k">2</span></button>
+            <button type="button" class="btn" data-val="intuition" data-key="3"><span class="lbl">intuition</span><span class="k">3</span></button>
+            <button type="button" class="btn" data-val="narrowed" data-key="4"><span class="lbl">between two</span><span class="k">4</span></button>
+            <button type="button" class="btn" data-val="guessed" data-key="5"><span class="lbl">guessed</span><span class="k">5</span></button>
+            <button type="button" class="btn" data-val="didnt-know" data-key="6"><span class="lbl">didn't know</span><span class="k">6</span></button>
+          </div>
+          <div class="scale-wrap" id="gateScaleWrap" hidden>
+            <div class="scale-label">how sure? (1–10)</div>
+            <div class="scale" id="gateScale" tabindex="-1">
+              <button type="button" class="scale-btn" data-n="1">1</button>
+              <button type="button" class="scale-btn" data-n="2">2</button>
+              <button type="button" class="scale-btn" data-n="3">3</button>
+              <button type="button" class="scale-btn" data-n="4">4</button>
+              <button type="button" class="scale-btn" data-n="5">5</button>
+              <button type="button" class="scale-btn" data-n="6">6</button>
+              <button type="button" class="scale-btn" data-n="7">7</button>
+              <button type="button" class="scale-btn" data-n="8">8</button>
+              <button type="button" class="scale-btn" data-n="9">9</button>
+              <button type="button" class="scale-btn" data-n="10">10</button>
+            </div>
+            <div class="scale-hint">1 = no idea · 10 = for sure</div>
+          </div>
+          <div class="stage2-row">
+            <button type="button" class="btn" id="gateContinue">continue →</button>
+          </div>
+        </div>
+        <button type="button" class="x" id="gateX" title="Skip — no rating recorded, click goes through">×</button>
+      </div>
+      <div class="toast" id="toastSlim" hidden role="status" aria-live="polite">
+        <div class="stage2-row">
+          <input type="text" id="slimInput" class="stage2-input" autocomplete="off" spellcheck="false"
+                 placeholder="why? didn't know… / not sure about…">
+          <div class="btns">
+            <button type="button" class="btn" id="slimSilly"><span class="lbl">silly mistake</span></button>
+            <button type="button" class="btn" id="slimSave">save</button>
+          </div>
+          <button type="button" class="details-link" id="slimDetails">details</button>
+        </div>
+        <button type="button" class="x" id="slimX" title="Close — anything already recorded stays">×</button>
       </div>`;
     shadow.appendChild(wrap);
 
@@ -733,6 +845,40 @@
       }
     });
 
+    // v0.20.0 — pre-submit gate toast wiring
+    for (const btn of shadow.querySelectorAll('#gateBtns .btn')) {
+      btn.addEventListener('click', () => chooseGateMechanism(btn.dataset.val));
+    }
+    for (const btn of shadow.querySelectorAll('#gateScale .scale-btn')) {
+      btn.addEventListener('click', () => selectGateConfNum(Number(btn.dataset.n)));
+    }
+    shadow.getElementById('gateContinue').addEventListener('click', () => {
+      if (!gateFp || !gateMechanism) return;
+      gateConfNum = null;
+      finishGate();
+    });
+    shadow.getElementById('gateX').addEventListener('click', skipGate);
+
+    // v0.20.0 — slim post-outcome toast wiring (incorrect outcome, a
+    // pre-submit rating already exists for this fp)
+    shadow.getElementById('slimSilly').addEventListener('click', toggleSlimSilly);
+    shadow.getElementById('slimSave').addEventListener('click', finishSlimSave);
+    shadow.getElementById('slimX').addEventListener('click', dismissSlimToast);
+    shadow.getElementById('slimDetails').addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('certbuddy:open-panel'));
+    });
+    const slimInput = shadow.getElementById('slimInput');
+    slimInput.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finishSlimSave();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissSlimToast();
+      }
+    });
+
     return shadow;
   }
 
@@ -742,6 +888,20 @@
       toastEl = toastShadow.getElementById('toast');
     }
     return toastShadow;
+  }
+
+  /** Only one of {#toast, #toastGate, #toastSlim} is ever meant to be
+   *  visible at once — called defensively at the top of every show*Toast
+   *  function below so an edge-case race can't leave two stacked. */
+  function hideAllToastVariants() {
+    clearTimeout(toastTimer);
+    if (!toastShadow) return;
+    const t = toastShadow.getElementById('toast');
+    if (t) t.hidden = true;
+    const g = toastShadow.getElementById('toastGate');
+    if (g) g.hidden = true;
+    const s = toastShadow.getElementById('toastSlim');
+    if (s) s.hidden = true;
   }
 
   /**
@@ -775,6 +935,7 @@
 
   function showToast(fp, outcome, data) {
     ensureToast();
+    hideAllToastVariants();
     toastFp = fp;
     toastOutcome = outcome;
     toastData = data;
@@ -874,7 +1035,7 @@
     // difference, since there's nothing to overwrite yet) and becomes true
     // the moment "← back" is used, so every pick AFTER a back overwrites
     // instead of losing to first-wins.
-    const setConfidenceDone = Store.setConfidence(fp, value, { force: toastRepicked }).catch((e) =>
+    const setConfidenceDone = Store.setConfidence(fp, value, { force: toastRepicked, confAt: 'post' }).catch((e) =>
       console.debug('[Cert Buddy] setConfidence failed', e)
     );
     // 'didnt-know' and 'slip' (wrong-dialect only) ARE explicit reason
@@ -1098,6 +1259,7 @@
           shaky: confidence === 'guessed',
           confidence,
           confNum,
+          confAt: 'post',
           qnum: (data && data.qnum) ?? null,
           qtotal: (data && data.qtotal) ?? null
         }).catch((e) => console.debug('[Cert Buddy] correct-capture addMiss failed', e))
@@ -1120,17 +1282,334 @@
     return false;
   }
 
+  /* ------------------------------------------------------------------ *
+   * Feature 4 (v0.20.0) — pre-submit confidence gate                    *
+   *                                                                      *
+   * Intercepts a click on the SITE's own submit/check button, BEFORE    *
+   * the page reveals right/wrong, and offers a compact "how sure?"      *
+   * pre-toast. Completing (or explicitly skipping via ×) releases the   *
+   * original click via a programmatic re-click, so the site's own       *
+   * handler still runs exactly as it would have. A pre-rating is joined *
+   * onto the outcome/miss the moment the real outcome fires — see       *
+   * handleCandidate/autoCaptureMiss above.                              *
+   * ------------------------------------------------------------------ */
+
+  // Default submit-button selectors the gate watches for; overridable via
+  // globalThis.__certBuddyPreSubmitSelectors, read at ENGAGE time (inside
+  // onDocumentClickCapture below), NOT once at load — so a test fixture can
+  // set/replace it either before or after this script has already loaded.
+  // The wpProQuiz pair is high-confidence for Tutorials Dojo's live "Check"
+  // button; the data-purpose pair is a best-guess for Udemy. A page that
+  // matches none of these never engages the gate — today's post-outcome-
+  // only behavior, unchanged.
+  const DEFAULT_PRE_SUBMIT_SELECTORS = [
+    'input.wpProQuiz_button[name="check"]',
+    '.wpProQuiz_button[name="check"]',
+    'button[data-purpose*="check-answer"]',
+    'button[data-purpose*="submit-answer"]'
+  ];
+
+  function getPreSubmitSelectors() {
+    const override = globalThis.__certBuddyPreSubmitSelectors;
+    return Array.isArray(override) && override.length ? override : DEFAULT_PRE_SUBMIT_SELECTORS;
+  }
+
+  // True while a click re-dispatched by this module's own gate
+  // (releaseGateClick) is in flight, so onDocumentClickCapture ignores it
+  // instead of trying to gate its own re-click.
+  let passingThrough = false;
+
+  // fps that have already been through the gate once — rated (see
+  // pendingPre) or explicitly skipped (×). Checked at engage time so a
+  // later click on the same question's submit control passes straight
+  // through. Never cleared — same accepted per-session-only limitation as
+  // firstSeen above (a fresh page load resets everything).
+  const preHandledFps = new Set();
+
+  // fp -> { confidence, confNum, secondsAtSubmit, ts } for a completed
+  // (rated, not skipped) pre-submit toast, consumed the moment the
+  // matching outcome fires — see handleCandidate's outcome join above.
+  const pendingPre = new Map();
+
+  // Fixed order/keys, per spec — unlike the outcome toast's dialects, the
+  // gate always shows the SAME 6 buttons in the SAME order every time, so
+  // no per-instance reshuffling (applyDialect-style) is needed here.
+  const GATE_MECHANISMS = [
+    { val: 'memorized', key: '1', label: 'memorized' },
+    { val: 'knew', key: '2', label: 'know it' },
+    { val: 'intuition', key: '3', label: 'intuition' },
+    { val: 'narrowed', key: '4', label: 'between two' },
+    { val: 'guessed', key: '5', label: 'guessed' },
+    { val: 'didnt-know', key: '6', label: "didn't know" }
+  ];
+
+  let gateFp = null;
+  let gateEl = null; // the submit control clicked — re-clicked once the gate resolves
+  let gateSecondsAtSubmit = null;
+  let gateMechanism = null;
+  let gateConfNum = null;
+
+  /**
+   * Re-dispatches a click on `el` with passingThrough set, so
+   * onDocumentClickCapture ignores this synthetic click instead of gating
+   * it again — this is what lets the page's OWN click handler (Udemy's
+   * check-answer XHR, wpProQuiz's reveal toggle, ...) finally run once the
+   * gate has recorded (or skipped) a pre-rating.
+   */
+  function releaseGateClick(el) {
+    if (!el) return;
+    passingThrough = true;
+    try {
+      el.click();
+    } catch (e) {
+      console.debug('[Cert Buddy] gate re-click failed', e);
+    } finally {
+      passingThrough = false;
+    }
+  }
+
+  function showGateToast(fp, el, secondsAtSubmit) {
+    ensureToast();
+    hideAllToastVariants();
+    gateFp = fp;
+    gateEl = el;
+    gateSecondsAtSubmit = secondsAtSubmit;
+    gateMechanism = null;
+    gateConfNum = null;
+    for (const b of toastShadow.querySelectorAll('#gateBtns .btn')) b.classList.remove('flash');
+    toastShadow.getElementById('gateScaleWrap').hidden = true;
+    // No delayed reveal here (unlike showToast's 400ms change-blindness
+    // delay) — this toast is a DIRECT response to the user's own click
+    // (already preventDefault()-ed), not a passively-arriving banner, so
+    // there's no masking render to wait out; an instant appearance is what
+    // explains why their click didn't visibly do anything yet.
+    toastShadow.getElementById('toastGate').hidden = false;
+  }
+
+  function hideGateToast() {
+    const el = toastShadow && toastShadow.getElementById('toastGate');
+    if (el) el.hidden = true;
+    gateFp = null;
+    gateEl = null;
+    gateSecondsAtSubmit = null;
+    gateMechanism = null;
+    gateConfNum = null;
+  }
+
+  function chooseGateMechanism(value) {
+    if (!gateFp) return;
+    gateMechanism = value;
+    for (const b of toastShadow.querySelectorAll('#gateBtns .btn')) {
+      b.classList.toggle('flash', b.dataset.val === value);
+    }
+    toastShadow.getElementById('gateScaleWrap').hidden = false;
+    toastShadow.getElementById('gateScale').focus();
+  }
+
+  /** Tapping a scale number completes the gate IMMEDIATELY (mechanism +
+   *  scale = done) — no morph delay, unlike the outcome toast's stage1. */
+  function selectGateConfNum(n) {
+    if (!gateFp || !gateMechanism) return;
+    gateConfNum = n;
+    finishGate();
+  }
+
+  /** [continue →] (or Enter): completes with mechanism only, confNum stays
+   *  null — only reachable once a mechanism is already chosen. */
+  function finishGate() {
+    if (!gateFp || !gateMechanism) return;
+    pendingPre.set(gateFp, {
+      confidence: gateMechanism,
+      confNum: gateConfNum,
+      secondsAtSubmit: gateSecondsAtSubmit,
+      ts: Date.now()
+    });
+    preHandledFps.add(gateFp);
+    const el = gateEl;
+    hideGateToast();
+    releaseGateClick(el);
+  }
+
+  /** × — skip entirely: no rating recorded, but the fp is still marked
+   *  handled so the gate never re-engages on a later click for the same
+   *  question. The post-outcome toast then runs exactly as it does today
+   *  (confAt:'post'), once the real outcome fires. */
+  function skipGate() {
+    if (!gateFp) return;
+    preHandledFps.add(gateFp);
+    const el = gateEl;
+    hideGateToast();
+    releaseGateClick(el);
+  }
+
+  /**
+   * Document-level CAPTURE-phase click gate. `engaged` is only set true
+   * once preventDefault()/stopImmediatePropagation() have actually been
+   * called — so if anything throws AFTER that point (inside
+   * showGateToast, say), the catch block re-dispatches the original click
+   * to release it, rather than leaving the page silently stuck with a
+   * blocked click and no toast. If something throws BEFORE that point,
+   * the native click was never prevented in the first place, so it just
+   * proceeds normally — a broken gate must never block the user's exam.
+   */
+  function onDocumentClickCapture(e) {
+    if (passingThrough) return;
+    let matchedEl = null;
+    let engaged = false;
+    try {
+      const target = e.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const selectors = getPreSubmitSelectors();
+      if (!Array.isArray(selectors) || !selectors.length) return;
+      for (const sel of selectors) {
+        matchedEl = target.closest(sel);
+        if (matchedEl) break;
+      }
+      if (!matchedEl) return;
+
+      const { fp } = extractCurrentQuestionFp();
+      if (!fp || preHandledFps.has(fp)) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      engaged = true;
+      const secondsAtSubmit = computeSecondsSince(fp);
+      showGateToast(fp, matchedEl, secondsAtSubmit);
+    } catch (err) {
+      console.debug('[Cert Buddy] submit gate error', err);
+      if (engaged && matchedEl) releaseGateClick(matchedEl);
+    }
+  }
+  document.addEventListener('click', onDocumentClickCapture, true);
+
+  /* ------------------------------------------------------------------ *
+   * Feature 4 (v0.20.0) — slim post-outcome toast                       *
+   * (incorrect outcome, a pre-submit rating already exists for this fp) *
+   * ------------------------------------------------------------------ */
+
+  let slimFp = null;
+  let slimSillyOn = false; // whether THIS toast's own setReasonIfEmpty('misread') call is currently standing
+
+  function showSlimToast(fp) {
+    ensureToast();
+    hideAllToastVariants();
+    slimFp = fp;
+    slimSillyOn = false;
+    const input = toastShadow.getElementById('slimInput');
+    input.value = '';
+    toastShadow.getElementById('slimSilly').classList.remove('flash');
+    const el = toastShadow.getElementById('toastSlim');
+    el.hidden = true;
+    // Same 400ms change-blindness delay as the full post-outcome toast
+    // (showToast) — this toast is likewise triggered by a passively-
+    // arriving banner, not a direct click.
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      el.hidden = false;
+    }, 400);
+  }
+
+  function hideSlimToast() {
+    clearTimeout(toastTimer);
+    const el = toastShadow && toastShadow.getElementById('toastSlim');
+    if (el) el.hidden = true;
+    slimFp = null;
+    slimSillyOn = false;
+  }
+
+  /**
+   * Toggle button: sets/clears reason 'misread' via the SAME
+   * setReasonIfEmpty/clearAutoReason machinery the main toast's
+   * AUTO_REASON_BY_CONFIDENCE path uses — but this is a manual toggle,
+   * never tied to (and never touching) the stored confidence, which must
+   * stay exactly what the pre-submit gate predicted.
+   */
+  function toggleSlimSilly() {
+    if (!slimFp || !toastShadow) return;
+    const fp = slimFp;
+    const btn = toastShadow.getElementById('slimSilly');
+    if (!slimSillyOn) {
+      slimSillyOn = true;
+      btn.classList.add('flash');
+      Store.setReasonIfEmpty(fp, 'misread')
+        .then((m) => {
+          // Only-if-empty guard declined (a reason from elsewhere already
+          // stood) — this toggle isn't the one wearing it, revert visually.
+          if (!m && slimFp === fp) {
+            slimSillyOn = false;
+            btn.classList.remove('flash');
+          }
+        })
+        .catch((e) => console.debug('[Cert Buddy] slim setReasonIfEmpty failed', e));
+    } else {
+      slimSillyOn = false;
+      btn.classList.remove('flash');
+      Store.clearAutoReason(fp).catch((e) => console.debug('[Cert Buddy] slim clearAutoReason failed', e));
+    }
+  }
+
+  /** [save] — commits typed text via the SAME setNotesByFp path stage2Save
+   *  uses ("same gold-data input... same commit path" per spec). */
+  function finishSlimSave() {
+    if (!slimFp) return;
+    const fp = slimFp;
+    const text = (toastShadow.getElementById('slimInput').value || '').trim();
+    if (text) {
+      Store.setNotesByFp(fp, text).catch((e) => console.debug('[Cert Buddy] setNotesByFp failed', e));
+    }
+    hideSlimToast();
+  }
+
+  /** × — closes without saving any UNCOMMITTED input text; the silly-
+   *  mistake toggle (if used) already committed the instant it was
+   *  tapped, same "close is not undo" rule as the main toast's
+   *  dismissToast. */
+  function dismissSlimToast() {
+    hideSlimToast();
+  }
+
   window.addEventListener(
     'keydown',
     (e) => {
-      if (!toastFp || !toastEl || toastEl.hidden) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return; // plain keys only
       // isTypingTarget is the REAL guard against stealing digits from the
       // stage-2 input (not stopPropagation on the input's own listener
       // below — this is a capture-phase listener on window, so it sees the
-      // event before that handler runs). Checked once, up front, for both
-      // branches below.
+      // event before that handler runs). Checked once, up front, for every
+      // branch below (gate included).
       if (isTypingTarget(e)) return;
+
+      // v0.20.0 — pre-submit gate toast keys, checked first: it's a
+      // distinct modal from the outcome toast below, and the two are
+      // mutually exclusive (see hideAllToastVariants). Per spec: digits
+      // 1-6 select mechanism, Enter = continue, Escape = skip (× twin) —
+      // no keyboard shortcut for the scale on this toast (click-only).
+      if (gateFp && toastShadow) {
+        const gateToastEl = toastShadow.getElementById('toastGate');
+        if (gateToastEl && !gateToastEl.hidden) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            skipGate();
+            return;
+          }
+          if (e.key === 'Enter') {
+            if (gateMechanism) {
+              e.preventDefault();
+              gateConfNum = null;
+              finishGate();
+            }
+            return;
+          }
+          const mech = GATE_MECHANISMS.find((m) => m.key === e.key);
+          if (mech) {
+            e.preventDefault();
+            chooseGateMechanism(mech.val);
+          }
+          return;
+        }
+      }
+
+      if (!toastFp || !toastEl || toastEl.hidden) return;
 
       if (toastStage === 1) {
         // Escape in stage 1 = same as × (close, nothing new recorded).
