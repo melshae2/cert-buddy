@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>popup.js harness (loads the real popup.html markup under mock-chrome)</title>
+<style>
+  /* Harness-only chrome — none of this is popup.css, which is loaded
+     separately below and applies to the injected markup only. */
+  #harnessBar {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+    color: #666; padding: 6px 10px; border-bottom: 1px solid #ddd; background: #fafafa;
+  }
+  #harnessBar.error { color: #a02622; background: #fdecea; }
+</style>
+</head>
+<body>
+<div id="harnessBar">popup-harness: loading&hellip;</div>
+<div id="popup-mount">(loading real popup.html markup&hellip;)</div>
+
+<script src="mock-chrome.js?v=2101"></script>
+<script>
+/**
+ * Assembles the real popup UI (markup from src/popup/popup.html, styles
+ * from src/popup/popup.css, behavior from popup.js and its lib/ deps) on
+ * top of the mock chrome installed above — so the exact same popup.js the
+ * extension ships loads Store/Tax and renders the dashboard against
+ * chrome.storage.local's in-memory mock instead of a real browser profile.
+ *
+ * Query params (both optional):
+ *   ?tabUrl=<url>   installs a fake chrome.tabs/chrome.scripting so popup.js's
+ *                   checkActiveTab() sees an "active tab" at that URL — lets
+ *                   you exercise the "Not on Udemy — Enable logging here" bar
+ *                   (SUPPORTED_HOSTS in popup.js) without a real browser tab.
+ *                   Omit it to test the mock-chrome.js default (no
+ *                   chrome.tabs at all — the bar must feature-detect and
+ *                   simply never appear).
+ *   ?seed=<json>    a URI-encoded JSON blob for the WHOLE 'certbuddy.v1'
+ *                   storage record (the same shape Store.getAll() returns:
+ *                   {version, misses, outcomes, backups, settings}) written
+ *                   into the mock storage BEFORE popup.js's own load() runs,
+ *                   so the dashboard renders pre-seeded data instead of the
+ *                   first-run empty state.
+ *
+ * See README.md in this directory for ready-made seed examples.
+ */
+(async function () {
+  const bar = document.getElementById('harnessBar');
+
+  function setBar(text, isError) {
+    bar.textContent = text;
+    bar.classList.toggle('error', !!isError);
+  }
+
+  function loadScriptSequential(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('failed to load script: ' + src));
+      document.body.appendChild(s);
+    });
+  }
+
+  try {
+    const params = new URLSearchParams(location.search);
+    const tabUrl = params.get('tabUrl');
+    const seedParam = params.get('seed');
+
+    // ?tabUrl= — installed BEFORE popup.js loads, since checkActiveTab()
+    // runs at the bottom of popup.js's own top-level IIFE, synchronously
+    // after load()/DOM wiring, the moment the script executes.
+    if (tabUrl) {
+      window.chrome.tabs = {
+        query: async () => [{ id: 1, url: tabUrl }]
+      };
+      window.chrome.scripting = {
+        executeScript: async () => {}
+      };
+    }
+
+    // ?seed= — parsed and written via the mock's own chrome.storage.local,
+    // same path popup.js's Store.getAll() reads from, so it's
+    // indistinguishable from data a real session had already logged.
+    // Failures here are non-fatal to the rest of harness setup (a bad seed
+    // shouldn't also prevent the popup itself from loading against an empty
+    // store) but ARE surfaced distinctly from a general harness failure.
+    if (seedParam) {
+      try {
+        const seedObj = JSON.parse(decodeURIComponent(seedParam));
+        await window.chrome.storage.local.set({ 'certbuddy.v1': seedObj });
+      } catch (e) {
+        window.__popupHarnessSeedError = e;
+        console.error('[popup-harness] seed failed', e);
+      }
+    }
+
+    // Fetch the REAL popup.html so the harness can never quietly drift from
+    // the shipped markup, extract just its <body> content, and strip its own
+    // <script> tags (their src paths are relative to src/popup/ and would
+    // 404 mounted here anyway — the loader below re-adds the same four
+    // scripts with correct ../../ paths and cache-busting query params).
+    const res = await fetch('../../src/popup/popup.html');
+    if (!res.ok) throw new Error('fetch popup.html failed: ' + res.status);
+    const html = await res.text();
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    const bodyHtml = bodyMatch ? bodyMatch[1] : html;
+    const stripped = bodyHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
+
+    document.getElementById('popup-mount').outerHTML = stripped;
+
+    // popup.css never shipped in the old harness — visual checks (chip
+    // colors, layout, dark-mode tokens) need the real stylesheet, not just
+    // the raw markup.
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '../../src/popup/popup.css?v=2101';
+    document.head.appendChild(link);
+
+    // Sequential, not parallel: store.js must finish attaching
+    // globalThis.CertBuddyStore before taxonomy.js/theme.js run their own
+    // IIFEs, and popup.js's top-level code touches all three the instant it
+    // executes (no DOMContentLoaded gate in popup.js — it runs inline).
+    const scripts = [
+      '../../src/lib/store.js?v=2101',
+      '../../src/lib/taxonomy.js?v=2101',
+      '../../src/lib/theme.js?v=2101',
+      '../../src/popup/popup.js?v=2101'
+    ];
+    for (const src of scripts) {
+      await loadScriptSequential(src);
+    }
+
+    window.__popupHarnessReady = true;
+    setBar(
+      'popup-harness: ready' +
+        (tabUrl ? ` · tabUrl=${tabUrl}` : '') +
+        (seedParam ? ' · seeded' : '') +
+        (window.__popupHarnessSeedError ? ' · SEED ERROR (see console)' : '')
+    );
+  } catch (e) {
+    window.__popupHarnessError = e;
+    console.error('[popup-harness] setup failed', e);
+    setBar('popup-harness: ERROR — ' + (e && e.message ? e.message : String(e)), true);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review Mode Set 1 &ndash; AWS Certified Solutions Architect &ndash; Professional | Tutorials Dojo Portal (fixture)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; background: #fff; color: #1a1a1a; }
+  .controls { position: sticky; top: 0; background: #fff; padding: 10px 0; border-bottom: 2px solid #333; margin-bottom: 16px; z-index: 5; }
+  .controls button { margin: 2px 6px 2px 0; padding: 6px 12px; cursor: pointer; }
+
+  .wpProQuiz_question_page { font-family: ui-monospace, monospace; font-size: 12px; color: #888; margin-bottom: 4px; }
+  .wpProQuiz_question { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin-bottom: 16px; }
+  .wpProQuiz_category { font-size: 12px; font-weight: 600; color: #6b4a05; margin-bottom: 8px; }
+  .wpProQuiz_question_text p { margin: 0 0 12px; }
+  .wpProQuiz_questionList { list-style: none; margin: 0; padding: 0; }
+  .wpProQuiz_questionListItem { border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .wpProQuiz_questionListItem label { margin-left: 6px; cursor: default; }
+  .wpProQuiz_answerCorrect { background: #e6f7ea; border-color: #34a853; }
+  .wpProQuiz_answerIncorrect { background: #fdecea; border-color: #d93025; }
+  .wpProQuiz_response { margin-top: 10px; }
+  .wpProQuiz_incorrect, .wpProQuiz_correct { padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-top: 6px; }
+  .wpProQuiz_incorrect { background: #fdecea; border: 1px solid #d93025; color: #a02622; }
+  .wpProQuiz_correct { background: #e6f7ea; border: 1px solid #34a853; color: #1e6b34; }
+
+  /* Review-grid decoy: matches Udemy's own sidebar trap (see adapters.js's
+     NAV_SEL comment) — every question in the bank gets a solved/unsolved
+     marker in here, so an unscoped scan would happily attribute question 9's
+     status to whichever question is actually on screen. */
+  .wpProQuiz_reviewDiv { background: #f5f5f5; padding: 10px; margin-top: 20px; }
+  .wpProQuiz_reviewQuestion { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
+  .wpProQuiz_reviewQuestion li { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid #ccc; border-radius: 4px; font-size: 11px; background: #fff; }
+  .wpProQuiz_reviewQuestionSolved { background: #e6f7ea; border-color: #34a853; }
+
+  #resultsOut { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; margin-top: 12px; }
+  #resultsOut .pass { color: #149463; }
+  #resultsOut .fail { color: #c73f52; font-weight: 700; }
+  #resultsOut .summary { font-weight: 700; margin-bottom: 6px; }
+  #modeStatus { font-family: ui-monospace, monospace; font-size: 11px; color: #666; margin-left: 6px; }
+</style>
+</head>
+<body>
+<h1>Review Mode Set 1 &ndash; AWS Certified Solutions Architect &ndash; Professional</h1>
+
+<!-- Both globals must exist before outcomes.js/adapters.js load:
+     __certBuddyForceTutorialsDojo makes tutorialsDojoAdapter.match() and
+     outcomes.js's IS_TUTORIALS_DOJO true on http://localhost, which can't
+     navigate to a real *.tutorialsdojo.com origin; __certBuddyPreSubmitSelectors
+     points the pre-submit gate at this fixture's own reveal buttons instead
+     of the (absent, on localhost) real wpProQuiz "Check" button. -->
+<script>
+  window.__certBuddyForceTutorialsDojo = true;
+  window.__certBuddyPreSubmitSelectors = ['#btnRevealQ2', '#btnRevealQ4'];
+</script>
+
+<div class="controls">
+  <strong>Harness controls:</strong>
+  <button id="btnShowQ4">Show multi-select question (Q4)</button>
+  <button id="btnShowQ2">Show single-select question (Q2)</button>
+  <button id="btnRevealQ2">Reveal Q2 answer (incorrect box)</button>
+  <button id="btnRevealQ4">Reveal Q4 answer (correct box)</button>
+  <button id="btnRunAdapterTests">Run adapter assertions</button>
+  <!-- v0.21.0 added a capture-mode setting (Store.getMode/setMode) that
+       onDocumentClickCapture itself now checks ("if (mode !== 'deep')
+       return;") before ever engaging the pre-submit gate — 'quick' (the
+       default on a fresh/unseeded store) lets the reveal buttons' clicks
+       through untouched with NO gate toast; only 'deep' engages it. This
+       button flips that setting live via chrome.storage.onChanged (mocked
+       here), no reload needed. -->
+  <button id="btnDeepMode">Switch to deep mode (shows the pre-submit gate)</button>
+  <span id="modeStatus"></span>
+  <div id="resultsOut"></div>
+</div>
+
+<div class="wpProQuiz_content">
+  <div class="wpProQuiz_quiz">
+    <ol class="wpProQuiz_list">
+
+      <!-- q1: stale hidden decoy — never visible unless something is broken.
+           tdVisibleBlock() must skip this even though it's earlier in
+           document order than q2. -->
+      <li class="wpProQuiz_listItem" id="q1" style="display:none;">
+        <div class="wpProQuiz_question_page">1. Question</div>
+        <div class="wpProQuiz_question" data-question_id="5101">
+          <div class="wpProQuiz_category">Category: CSAP &ndash; Networking</div>
+          <div class="wpProQuiz_question_text">
+            <p>STALE QUESTION 1 (must never be extracted while Q2 or Q4 is visible): Which service provides a managed NAT gateway?</p>
+          </div>
+          <ul class="wpProQuiz_questionList">
+            <li class="wpProQuiz_questionListItem">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5101" id="q1opt1">
+              <label for="q1opt1">Amazon VPC NAT Gateway</label>
+            </li>
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerCorrect">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5101" id="q1opt2" checked>
+              <label for="q1opt2">A self-managed NAT instance</label>
+            </li>
+          </ul>
+          <div class="wpProQuiz_response">
+            <div class="wpProQuiz_incorrect" style="display:none;">Incorrect.</div>
+            <div class="wpProQuiz_correct" style="display:none;">Correct!</div>
+          </div>
+        </div>
+      </li>
+
+      <!-- q2: visible single-select. question_page carries the OTHER
+           wpProQuiz numbering variant ("19. Question") on purpose — the
+           stem's own leading "Question 41:" marker must win over it in
+           parseQuestionNumber's priority order. -->
+      <li class="wpProQuiz_listItem" id="q2" style="display:block;">
+        <div class="wpProQuiz_question_page">19. Question</div>
+        <div class="wpProQuiz_question" data-question_id="5102">
+          <div class="wpProQuiz_category">Category: CSAP &ndash; Compute &amp; Serverless</div>
+          <div class="wpProQuiz_question_text">
+            <p>Question 41: A solutions architect needs the MOST cost-effective way to run a batch job that can tolerate interruption. Which EC2 purchasing option should be used?</p>
+          </div>
+          <ul class="wpProQuiz_questionList">
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerIncorrect">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5102" id="q2opt1" checked>
+              <label for="q2opt1">On-Demand Instances</label>
+            </li>
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerCorrect">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5102" id="q2opt2">
+              <label for="q2opt2">Spot Instances</label>
+            </li>
+            <li class="wpProQuiz_questionListItem">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5102" id="q2opt3">
+              <label for="q2opt3">Reserved Instances</label>
+            </li>
+            <li class="wpProQuiz_questionListItem">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5102" id="q2opt4">
+              <label for="q2opt4">Dedicated Hosts</label>
+            </li>
+          </ul>
+          <div class="wpProQuiz_response">
+            <!-- Inline display:none only — no stylesheet rule hides this, so
+                 clearing style.display (btnRevealQ2) falls through to the
+                 div's normal block default and isVisible() sees it. -->
+            <div class="wpProQuiz_incorrect" id="q2incorrectBox" style="display:none;">
+              Incorrect. The correct answer is Spot Instances &mdash; this workload tolerates interruption, so Spot pricing is the most cost-effective purchasing option.
+            </div>
+            <div class="wpProQuiz_correct" style="display:none;">Correct!</div>
+          </div>
+        </div>
+      </li>
+
+      <!-- q3: second stale hidden decoy, same shape as q1. -->
+      <li class="wpProQuiz_listItem" id="q3" style="display:none;">
+        <div class="wpProQuiz_question_page">3. Question</div>
+        <div class="wpProQuiz_question" data-question_id="5103">
+          <div class="wpProQuiz_category">Category: CSAP &ndash; Storage</div>
+          <div class="wpProQuiz_question_text">
+            <p>STALE QUESTION 3 (must never be extracted while Q2 or Q4 is visible): Which S3 storage class is cheapest for data accessed once a year?</p>
+          </div>
+          <ul class="wpProQuiz_questionList">
+            <li class="wpProQuiz_questionListItem">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5103" id="q3opt1">
+              <label for="q3opt1">S3 Standard</label>
+            </li>
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerCorrect">
+              <input class="wpProQuiz_questionInput" type="radio" name="question_5103" id="q3opt2" checked>
+              <label for="q3opt2">S3 Glacier Deep Archive</label>
+            </li>
+          </ul>
+          <div class="wpProQuiz_response">
+            <div class="wpProQuiz_incorrect" style="display:none;">Incorrect.</div>
+            <div class="wpProQuiz_correct" style="display:none;">Correct!</div>
+          </div>
+        </div>
+      </li>
+
+      <!-- q4: hidden until btnShowQ4, multi-select checkboxes. Stem carries
+           NO leading marker at all, so parseQuestionNumber must fall all the
+           way through to qnumText (this block's own .wpProQuiz_question_page,
+           the OTHER wpProQuiz variant: "Question N of M"). -->
+      <li class="wpProQuiz_listItem" id="q4" style="display:none;">
+        <div class="wpProQuiz_question_page">Question 12 of 65</div>
+        <div class="wpProQuiz_question" data-question_id="5104">
+          <div class="wpProQuiz_category">Category: CSAP &ndash; Networking</div>
+          <div class="wpProQuiz_question_text">
+            <p>A company must reduce NAT gateway data processing charges for traffic from private subnets to Amazon S3 and Amazon DynamoDB. Which TWO actions should a solutions architect take? (Select TWO)</p>
+          </div>
+          <ul class="wpProQuiz_questionList">
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerCorrect">
+              <input class="wpProQuiz_questionInput" type="checkbox" name="question_5104[]" id="q4opt1" checked>
+              <label for="q4opt1">Create a gateway VPC endpoint for Amazon S3</label>
+            </li>
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerCorrect">
+              <input class="wpProQuiz_questionInput" type="checkbox" name="question_5104[]" id="q4opt2">
+              <label for="q4opt2">Create a gateway VPC endpoint for DynamoDB</label>
+            </li>
+            <li class="wpProQuiz_questionListItem wpProQuiz_answerIncorrect">
+              <input class="wpProQuiz_questionInput" type="checkbox" name="question_5104[]" id="q4opt3" checked>
+              <label for="q4opt3">Create an interface endpoint for Amazon EC2</label>
+            </li>
+            <li class="wpProQuiz_questionListItem">
+              <input class="wpProQuiz_questionInput" type="checkbox" name="question_5104[]" id="q4opt4">
+              <label for="q4opt4">Replace the NAT gateway with a NAT instance</label>
+            </li>
+          </ul>
+          <div class="wpProQuiz_response">
+            <div class="wpProQuiz_incorrect" style="display:none;">Not quite &mdash; one of your selections doesn't reduce NAT processing charges.</div>
+            <!-- Same inline-only display:none rule as q2incorrectBox above. -->
+            <div class="wpProQuiz_correct" id="q4correctBox" style="display:none;">
+              Partially correct &mdash; gateway VPC endpoints for S3 and DynamoDB avoid the NAT gateway entirely for that traffic; the EC2 interface endpoint doesn't touch NAT processing charges at all.
+            </div>
+          </div>
+        </div>
+      </li>
+
+    </ol>
+
+    <!-- Review-grid decoy, OUTSIDE the question blocks — matches
+         adapters.js's NAV_SEL (`.wpProQuiz_reviewDiv,...`) directly via its
+         own class, so inNav()/isRealNav() exclude it wherever a caller
+         checks (tutorialsDojoAdapter.extract() itself never scans outside
+         the one visible .wpProQuiz_listItem, so this is inert to it — this
+         decoy exists for structural realism and to exercise NAV_SEL for any
+         generic-adapter code path that might otherwise walk the whole page). -->
+    <div class="wpProQuiz_reviewDiv">
+      <ol class="wpProQuiz_reviewQuestion">
+        <li class="wpProQuiz_reviewQuestionSolved">1</li>
+        <li class="wpProQuiz_reviewQuestionSolved">2</li>
+        <li>3</li>
+        <li class="wpProQuiz_reviewQuestionSolved">4</li>
+        <li>5</li>
+        <li>6</li>
+        <li class="wpProQuiz_reviewQuestionSolved">7</li>
+        <li>8</li>
+        <li class="wpProQuiz_reviewQuestionSolved">9</li>
+        <li>10</li>
+        <li>11</li>
+        <li class="wpProQuiz_reviewQuestionSolved">12</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<script src="mock-chrome.js?v=2101"></script>
+<script src="../../src/lib/store.js?v=2101"></script>
+<script src="../../src/lib/taxonomy.js?v=2101"></script>
+<script src="../../src/lib/theme.js?v=2101"></script>
+<script src="../../src/content/adapters.js?v=2101"></script>
+<script src="../../src/content/outcomes.js?v=2101"></script>
+<script src="../../src/content/tagger.js?v=2101"></script>
+<script>
+(function () {
+  const q2 = document.getElementById('q2');
+  const q4 = document.getElementById('q4');
+
+  document.getElementById('btnShowQ4').addEventListener('click', () => {
+    q2.style.display = 'none';
+    q4.style.display = 'block';
+  });
+  document.getElementById('btnShowQ2').addEventListener('click', () => {
+    q4.style.display = 'none';
+    q2.style.display = 'block';
+  });
+
+  const modeStatus = document.getElementById('modeStatus');
+  function refreshModeStatus() {
+    window.CertBuddyStore.getMode().then((m) => {
+      modeStatus.textContent = 'mode: ' + m + (m === 'quick' ? ' (gate off — reveal buttons go straight through)' : ' (gate on)');
+    });
+  }
+  refreshModeStatus();
+  document.getElementById('btnDeepMode').addEventListener('click', async () => {
+    await window.CertBuddyStore.setMode('deep');
+    refreshModeStatus();
+  });
+
+  // Both reveal buttons are also submit-gate targets (see
+  // window.__certBuddyPreSubmitSelectors above) — but the gate itself only
+  // engages when capture mode is 'deep' (Store.getMode(); 'quick' is the
+  // default on a fresh store and lets every click straight through — see
+  // the #btnDeepMode button above). In 'deep' mode, outcomes.js's
+  // capture-phase click gate intercepts the FIRST click on each button
+  // (preventDefault + stopImmediatePropagation) to show its "how sure?"
+  // pre-toast, and only once that toast is resolved (a mechanism pick +
+  // continue, or the toast's own X to skip) does it re-dispatch a synthetic
+  // click that reaches this handler. That's the intended flow for
+  // exercising the pre-submit gate alongside the wpProQuiz attribute-toggle
+  // outcome path below — switch to deep mode, click the button, answer (or
+  // skip) the gate toast, watch the feedback box appear and (if
+  // IS_TUTORIALS_DOJO's attribute path fires correctly) the outcome get
+  // logged.
+  document.getElementById('btnRevealQ2').addEventListener('click', () => {
+    document.getElementById('q2incorrectBox').style.display = '';
+  });
+  document.getElementById('btnRevealQ4').addEventListener('click', () => {
+    document.getElementById('q4correctBox').style.display = '';
+  });
+
+  function deepEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  document.getElementById('btnRunAdapterTests').addEventListener('click', () => {
+    const lines = [];
+    let pass = 0;
+    let fail = 0;
+
+    function assert(cond, label) {
+      if (cond) {
+        pass++;
+        lines.push({ ok: true, label });
+      } else {
+        fail++;
+        lines.push({ ok: false, label });
+      }
+    }
+
+    try {
+      // (1) Q2 visible.
+      q4.style.display = 'none';
+      q2.style.display = 'block';
+      const d1 = window.CertBuddyAdapters.extract();
+      assert(d1.question.startsWith('A solutions architect'), 'Q2 question starts with "A solutions architect" (marker stripped)');
+      assert(!d1.question.includes('Category:'), 'Q2 question does not contain "Category:"');
+      assert(!d1.question.includes('STALE'), 'Q2 question does not contain "STALE"');
+      assert(deepEqual(d1.yourAnswers, ['On-Demand Instances']), 'Q2 yourAnswers deep-equals ["On-Demand Instances"]');
+      assert(deepEqual(d1.correctAnswers, ['Spot Instances']), 'Q2 correctAnswers deep-equals ["Spot Instances"]');
+      assert(d1.qnum === 41, 'Q2 qnum === 41 (stem marker wins over "19. Question")');
+      assert(d1.selectCount === 1, 'Q2 selectCount === 1');
+
+      // (2) Show Q4.
+      q2.style.display = 'none';
+      q4.style.display = 'block';
+      const d2 = window.CertBuddyAdapters.extract();
+      assert(d2.question.startsWith('A company must reduce'), 'Q4 question starts with "A company must reduce"');
+      assert(d2.correctAnswers.length === 2, 'Q4 correctAnswers.length === 2');
+      assert(d2.yourAnswers.length === 2, 'Q4 yourAnswers.length === 2');
+      assert(d2.selectCount === 2, 'Q4 selectCount === 2 (from "Select TWO" in the stem)');
+      assert(d2.qnum === 12 && d2.qtotal === 65, 'Q4 qnum === 12 && qtotal === 65 (from qnumText "Question 12 of 65")');
+      const partial = window.CertBuddyStore.computePartial(d2.yourAnswers, d2.correctAnswers, d2.selectCount);
+      assert(deepEqual(partial, { got: 1, of: 2 }), 'Q4 computePartial(yourAnswers, correctAnswers, selectCount) deep-equals {got:1, of:2}');
+    } catch (e) {
+      fail++;
+      lines.push({ ok: false, label: 'threw: ' + (e && e.message ? e.message : String(e)) });
+    } finally {
+      // (3) restore Q2 at the end.
+      q4.style.display = 'none';
+      q2.style.display = 'block';
+    }
+
+    window.__tdSummary = { pass, fail };
+    const out = document.getElementById('resultsOut');
+    const summary = `<div class="summary ${fail ? 'fail' : 'pass'}">${pass} pass / ${fail} fail</div>`;
+    out.innerHTML = summary + lines.map((l) => `<div class="${l.ok ? 'pass' : 'fail'}">${l.ok ? 'PASS' : 'FAIL'} ${l.label}</div>`).join('');
+  });
+})();
+</script>
+</body>
+</html>

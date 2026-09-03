@@ -30,7 +30,7 @@
 <body>
 <h1>cert-buddy — pure-function test harness</h1>
 <p class="hint">
-  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=2001, taxonomy.js and
+  Exercises the pure (no chrome.storage, no DOM) functions in store.js?v=2101, taxonomy.js and
   adapters.js directly. No seed data, no mock storage — every expected value below is
   either a literal computed from reading the source (migrateReason's table, detectWeighted's
   scoring/cap rules, sessionize's gap math, focusTopics' decay formula) or a deliberate
@@ -41,14 +41,14 @@
 
 <!-- Tiny inline chrome stub. The pure functions under test never touch
      storage — this exists only so nothing throws if that assumption is ever
-     wrong; store.js?v=2001's read()/write()/clearAll() (which DO use chrome.storage)
+     wrong; store.js?v=2101's read()/write()/clearAll() (which DO use chrome.storage)
      are never called by this harness. -->
 <script>
   window.chrome = window.chrome || { runtime: {}, storage: { local: {} } };
 </script>
-<script src="../src/lib/store.js?v=2001"></script>
-<script src="../src/lib/taxonomy.js?v=2001"></script>
-<script src="../src/content/adapters.js?v=2001"></script>
+<script src="../src/lib/store.js?v=2101"></script>
+<script src="../src/lib/taxonomy.js?v=2101"></script>
+<script src="../src/content/adapters.js?v=2101"></script>
 <script>
 (function () {
   const results = [];
@@ -78,7 +78,7 @@
   const Adapters = window.CertBuddyAdapters;
 
   // =====================================================================
-  group('fingerprint (store.js?v=2001)');
+  group('fingerprint (store.js?v=2101)');
   // =====================================================================
   {
     const quickFox = 'The quick brown fox jumps over the lazy dog while studying for the exam diligently.';
@@ -119,11 +119,11 @@
   }
 
   // =====================================================================
-  group('migrateReason (store.js?v=2001)');
+  group('migrateReason (store.js?v=2101)');
   // =====================================================================
   {
     // All 7 legacy ids from the pre-taxonomy-v2 7-bucket reason model,
-    // mapped per store.js?v=2001's LEGACY_REASON_MAP.
+    // mapped per store.js?v=2101's LEGACY_REASON_MAP.
     const legacy = {
       'didnt-know': 'never-learned',
       'confused-two': 'never-learned',
@@ -149,7 +149,7 @@
   }
 
   // =====================================================================
-  group("confidence migration: 'unsure' -> 'narrowed' (store.js?v=2001)");
+  group("confidence migration: 'unsure' -> 'narrowed' (store.js?v=2101)");
   // =====================================================================
   {
     // Minimal-but-valid fixtures — normalizeMiss reads m.ts (attempts
@@ -198,7 +198,7 @@
   }
 
   // =====================================================================
-  group('confNum (store.js?v=2001)');
+  group('confNum (store.js?v=2101)');
   // =====================================================================
   {
     const baseMiss = {
@@ -245,7 +245,7 @@
   }
 
   // =====================================================================
-  group('confAt (store.js?v=2001)');
+  group('confAt (store.js?v=2101)');
   // =====================================================================
   {
     const baseMiss = {
@@ -277,7 +277,47 @@
   }
 
   // =====================================================================
-  group('seconds — per-question timer, v0.19.0 (store.js?v=2001)');
+  group('capture mode — normalizeMode / Miss.mode / Outcome.mode, v0.21.0 (store.js?v=2101)');
+  // =====================================================================
+  {
+    // --- normalizeMode: 'quick' | 'deep', anything else -> 'quick' (fail-open) ---
+    assertEqual(Store.normalizeMode('quick'), 'quick', "normalizeMode: 'quick' passes through unchanged");
+    assertEqual(Store.normalizeMode('deep'), 'deep', "normalizeMode: 'deep' passes through unchanged");
+    assertEqual(Store.normalizeMode('x'), 'quick', "normalizeMode: unrecognised 'x' -> 'quick' (fail-open)");
+    assertEqual(Store.normalizeMode(undefined), 'quick', 'normalizeMode: undefined -> \'quick\' (fail-open)');
+    assertEqual(Store.normalizeMode(null), 'quick', "normalizeMode: null -> 'quick' (fail-open)");
+
+    // --- Miss.mode / Outcome.mode: same normalizer inline in normalizeMiss/normalizeOutcome ---
+    const baseMiss = {
+      id: 'modem1',
+      ts: 1700000000000,
+      question: 'A different sufficiently long dummy question text for fingerprinting purposes.',
+      reason: '',
+      attempts: [1700000000000]
+    };
+    const baseOutcome = { id: 'modeo1', fp: 'fpmodetest', outcome: 'correct', ts: 1700000000000, attempts: [1700000000000] };
+
+    assertEqual(Store.normalizeMiss({ ...baseMiss, mode: 'quick' }).mode, 'quick',
+      "normalizeMiss: mode 'quick' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss, mode: 'deep' }).mode, 'deep',
+      "normalizeMiss: mode 'deep' passes through unchanged");
+    assertEqual(Store.normalizeMiss({ ...baseMiss }).mode, null,
+      'normalizeMiss: a record with no mode field at all backfills to null (legacy record)');
+    assertEqual(Store.normalizeMiss({ ...baseMiss, mode: 'garbage' }).mode, null,
+      "normalizeMiss: an unrecognised mode value normalizes to null (NOT 'quick' — unlike normalizeMode's own fail-open, a bogus stored value here just means \"unknown\", not \"quick\")");
+
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, mode: 'quick' }).mode, 'quick',
+      "normalizeOutcome: mode 'quick' passes through unchanged");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, mode: 'deep' }).mode, 'deep',
+      "normalizeOutcome: mode 'deep' passes through unchanged");
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome }).mode, null,
+      'normalizeOutcome: a record with no mode field at all backfills to null (legacy record)');
+    assertEqual(Store.normalizeOutcome({ ...baseOutcome, mode: 'garbage' }).mode, null,
+      "normalizeOutcome: an unrecognised mode value normalizes to null");
+  }
+
+  // =====================================================================
+  group('seconds — per-question timer, v0.19.0 (store.js?v=2101)');
   // =====================================================================
   {
     const baseMiss = {
@@ -305,7 +345,7 @@
   }
 
   // =====================================================================
-  group('sessionize (store.js?v=2001)');
+  group('sessionize (store.js?v=2101)');
   // =====================================================================
   {
     const GAP_MS = 90 * 60 * 1000;
@@ -350,7 +390,7 @@
   }
 
   // =====================================================================
-  group('focusTopics (store.js?v=2001)');
+  group('focusTopics (store.js?v=2101)');
   // =====================================================================
   {
     const NOW = 2000000000000;
@@ -496,7 +536,7 @@
   }
 
   // =====================================================================
-  group('multi-select array backfill via normalizeMiss (store.js?v=2001)');
+  group('multi-select array backfill via normalizeMiss (store.js?v=2101)');
   // =====================================================================
   {
     const baseMiss = {
@@ -630,7 +670,7 @@
   }
 
   // =====================================================================
-  group('computePartial (store.js?v=2001)');
+  group('computePartial (store.js?v=2101)');
   // =====================================================================
   {
     assertEqual(JSON.stringify(Store.computePartial(['A', 'B'], ['A', 'B'], 2)), JSON.stringify({ got: 2, of: 2 }),

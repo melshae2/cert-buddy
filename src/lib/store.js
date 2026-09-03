@@ -24,7 +24,13 @@
     settings: {
       autoTag: true,
       hiddenHosts: [],
-      lastExportAt: 0
+      lastExportAt: 0,
+      // Capture mode, v0.21.0 — 'quick' (default: zero mandatory
+      // interaction) or 'deep' (v0.20.0's pre-submit gate + full toasts).
+      // read() Object.assigns these defaults over whatever's actually
+      // stored, so a legacy settings blob (this key absent entirely) picks
+      // up 'quick' the same way autoTag/hiddenHosts already do.
+      mode: 'quick'
     }
   });
 
@@ -136,7 +142,10 @@
       qnum: m.qnum ?? null,
       qtotal: m.qtotal ?? null,
       // Per-question timer, v0.19.0; legacy records null.
-      seconds: Number.isFinite(m.seconds) ? m.seconds : null
+      seconds: Number.isFinite(m.seconds) ? m.seconds : null,
+      // Which capture mode this record was made under, v0.21.0 — 'quick' |
+      // 'deep'; legacy/unrecognised records get null (see normalizeMode).
+      mode: m.mode === 'quick' || m.mode === 'deep' ? m.mode : null
     };
   }
 
@@ -163,6 +172,9 @@
       qtotal: o.qtotal ?? null,
       // Per-question timer, v0.19.0; legacy records null.
       seconds: Number.isFinite(o.seconds) ? o.seconds : null,
+      // Which capture mode this record was made under, v0.21.0 — 'quick' |
+      // 'deep'; legacy/unrecognised records get null (see normalizeMode).
+      mode: o.mode === 'quick' || o.mode === 'deep' ? o.mode : null,
       yourAnswers,
       correctAnswers,
       selectCount,
@@ -215,6 +227,20 @@
     const num = Number(n);
     if (!Number.isFinite(num)) return null;
     return Math.min(10, Math.max(1, Math.round(num)));
+  }
+
+  /**
+   * Pure normalizer for the capture-mode setting, v0.21.0: 'quick' (the
+   * new default — zero mandatory interaction) or 'deep' (v0.20.0's
+   * pre-submit gate + full toasts, unchanged). Anything else — an
+   * unrecognised string, a legacy settings blob with no `mode` key at all,
+   * null/undefined — normalizes to 'quick', the fail-open direction (a
+   * broken/unknown mode should never silently gate the user's exam behind
+   * a blocking toast). Exposed on Store so tests/test.html can exercise it
+   * directly, same reasoning as clampConfNum/migrateReason.
+   */
+  function normalizeMode(v) {
+    return v === 'deep' ? 'deep' : 'quick';
   }
 
   /**
@@ -377,6 +403,11 @@
    *                                 before this outcome/miss was recorded (outcomes.js's firstSeen sighting
    *                                 map, clamped 0..3600), or null when the sighting was never captured
    *                                 (legacy records, or a manual tagger save with no passive sighting)
+   * @property {?('quick'|'deep')} mode  which capture mode (v0.21.0) this record was made under — 'quick'
+   *                                 (zero mandatory interaction, the default) or 'deep' (v0.20.0's
+   *                                 pre-submit gate + full toasts); null for legacy records that predate
+   *                                 the field. Sticky to the ORIGINAL capture on a repeat-merge (see
+   *                                 addMiss), same rule as `shaky`.
    *
    * NOTE on 'memorized' as a single-value field: once a fp is flagged
    * memorized (via an Outcome or an explicit tagger save), that flag doesn't
@@ -421,6 +452,9 @@
    * @property {?number} seconds     same meaning as Miss.seconds — set once at creation (logOutcome's
    *                                 re-detection branch never revises it; a re-detection is a re-read, not
    *                                 a new timing window)
+   * @property {?('quick'|'deep')} mode  same meaning as Miss.mode, v0.21.0 — set once at creation
+   *                                 (logOutcome's re-detection branch never revises it, same reasoning
+   *                                 as `seconds`); null for legacy records
    */
 
   const Store = {
@@ -449,6 +483,9 @@
     // Exposed so tests/test.html can exercise setConfNum's clamping rule
     // directly — see clampConfNum's own doc comment.
     clampConfNum,
+    // Exposed so tests/test.html can exercise the capture-mode fail-open
+    // rule directly — see normalizeMode's own doc comment.
+    normalizeMode,
     // Exposed so tests/test.html can exercise the partial-credit calculation
     // directly — see computePartial's own doc comment.
     computePartial,
@@ -549,6 +586,14 @@
         // attempt and leaves shaky as-is. A later attempt that's NOT shaky
         // (a real miss) proves it's for real, so it clears the flag.
         if (partial.shaky === false) existing.shaky = false;
+        // mode: which capture mode this record was made under, v0.21.0 —
+        // sticky to the ORIGINAL capture, same idea as `shaky` above: a
+        // later repeat attempt made under a different mode (the user
+        // switched quick/deep mid-session) doesn't rewrite which mode this
+        // question was FIRST captured under. Only fills if unset.
+        if (existing.mode == null && (partial.mode === 'quick' || partial.mode === 'deep')) {
+          existing.mode = partial.mode;
+        }
         // This attempt counts as triaged if it explicitly says so, or if a
         // reason came with it — same rule as a fresh capture, applied to the
         // record as a whole (a triaged repeat re-flags it for the debrief).
@@ -606,6 +651,10 @@
         qnum: null,
         qtotal: null,
         seconds: null,
+        // Which capture mode this record was made under, v0.21.0; legacy
+        // null. See the repeat-merge branch above for the sticky-to-
+        // original-capture rule this same field follows on a repeat.
+        mode: null,
         ...partial,
         fp,
         attempts: [now]
@@ -701,6 +750,11 @@
       // setConfidence/setConfNum's first-tap-wins join.
       confNum = null,
       confAt = null,
+      // Capture mode this outcome was logged under — 'quick' | 'deep' |
+      // null, v0.21.0. Same real-whitelist reasoning as `seconds` below:
+      // outcomes.js passes its module-level `mode` explicitly so it's
+      // never silently dropped on the way into a NEW outcome record.
+      mode = null,
       exam,
       url,
       yourAnswers = [],
@@ -740,6 +794,7 @@
         confidence,
         confNum,
         confAt,
+        mode,
         qnum,
         qtotal,
         seconds,
@@ -953,6 +1008,20 @@
       db.settings = { ...db.settings, ...patch };
       await write(db);
       return db.settings;
+    },
+
+    /**
+     * Capture mode, v0.21.0 — 'quick' (default) or 'deep'. Thin
+     * normalize-on-the-way-out wrapper over settings.mode, same shape as
+     * every other settings getter/setter here (see normalizeMode's own
+     * doc comment for the fail-open reasoning).
+     */
+    async getMode() {
+      return normalizeMode((await read()).settings.mode);
+    },
+
+    async setMode(mode) {
+      return Store.setSettings({ mode: normalizeMode(mode) });
     },
 
     /**

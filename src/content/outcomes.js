@@ -68,6 +68,23 @@
  * tagger.js (order doesn't matter between those two, but the manifest keeps
  * store -> taxonomy -> adapters -> outcomes -> tagger). Loaded both as a
  * static content script and via the popup's on-demand injection.
+ *
+ * Modes (v0.21.0): everything above (the gate, both toast dialects, the
+ * slim post-outcome toast) is DEEP mode — unchanged from v0.20.0. QUICK
+ * mode is the new default: zero mandatory interaction. The submit-click
+ * gate never engages (onDocumentClickCapture returns before
+ * preventDefault), and handleCandidate's outcome branch skips every toast
+ * — a correct outcome gets nothing at all, an incorrect one still
+ * auto-captures the miss (passive capture is unaffected by mode either
+ * way) and surfaces it via a small, non-blocking "captured" pill instead.
+ * Quick mode offers exactly two OPTIONAL touchpoints in place of all that:
+ * a digit key pressed before Check pre-rates a numeric confidence ahead of
+ * time (see the keydown handler's quick-mode branch and the flash pill),
+ * and the captured pill itself can be clicked (or dismissed with N) to
+ * open the same slim toast for an on-demand note — never a prompt. The
+ * module-level `mode` is read once via Store.getMode() at init and kept
+ * live via chrome.storage.onChanged, defaulting to 'quick' (fail-open)
+ * until that first read resolves.
  */
 (function () {
   if (window.__certBuddyOutcomesLoaded) return;
@@ -78,6 +95,32 @@
   const Theme = globalThis.CertBuddyTheme;
   const Tax = globalThis.CertBuddyTaxonomy;
   if (!Store || !Adapters || !Theme || !Tax) return; // load-order guard, mirrors tagger.js
+
+  /* ------------------------------------------------------------------ *
+   * Capture mode, v0.21.0 — 'quick' (zero mandatory interaction, the    *
+   * default) or 'deep' (v0.20.0's pre-submit gate + full toasts,        *
+   * unchanged). Read once at init and kept live via chrome.storage.     *
+   * onChanged so a mode flip in the popup takes effect without a page   *
+   * reload. Defaults to 'quick' (fail-open: the module-level `mode`     *
+   * starts 'quick' before the async read resolves, and a page that gets *
+   * a click in that tiny window sees quick behavior — no gate, no       *
+   * blocked click — rather than deep's blocking one; a broken/slow read *
+   * must never leave the user stuck behind a toast). *
+   * ------------------------------------------------------------------ */
+  let mode = 'quick';
+  Store.getMode().then((m) => {
+    mode = m;
+  });
+  // Guarded so a test-harness chrome stub with no onChanged (or no
+  // chrome.storage at all) is a silent no-op rather than a load-time throw.
+  const oc = globalThis.chrome && chrome.storage && chrome.storage.onChanged;
+  if (oc && oc.addListener) {
+    oc.addListener((changes, area) => {
+      if (area === 'local' && changes[Store.KEY]) Store.getMode().then((m) => {
+        mode = m;
+      });
+    });
+  }
 
   function safe(fn, fallback) {
     try {
@@ -201,7 +244,24 @@
     // logOutcome().then() below confirms a fresh (non-deduped) record.
     const pending = pendingPre.get(fp) || null;
     const confAt = pending ? 'pre' : null;
-    const seconds = pending && Number.isFinite(pending.secondsAtSubmit) ? pending.secondsAtSubmit : measuredSeconds;
+    // v0.21.0 — submitSnapshots (taken in onDocumentClickCapture, both
+    // modes, the instant the site's own submit control was clicked) is the
+    // most reliable seconds-at-submit reading available: in deep mode it's
+    // the exact same value pending.secondsAtSubmit already carries (that
+    // branch is now just this same snapshot read back — see
+    // onDocumentClickCapture), and in quick mode it's the ONLY submit-time
+    // reading there is (a digit-key pre-rating's own secondsAtSubmit is
+    // always null — see the keydown handler below). Falls through to
+    // pending's own snapshot, then to the live measurement, for an outcome
+    // that never went through the submit-selector click path at all
+    // (forcedOutcome / the wpProQuiz attribute-toggle path has no click to
+    // snapshot).
+    const snap = submitSnapshots.get(fp);
+    const seconds = Number.isFinite(snap)
+      ? snap
+      : pending && Number.isFinite(pending.secondsAtSubmit)
+      ? pending.secondsAtSubmit
+      : measuredSeconds;
     const confidence = pending ? pending.confidence : null;
     const confNum = pending ? pending.confNum : null;
 
@@ -212,6 +272,7 @@
       confidence,
       confNum,
       confAt,
+      mode,
       yourAnswers: data.yourAnswers,
       correctAnswers: data.correctAnswers,
       selectCount: data.selectCount,
@@ -230,10 +291,20 @@
           // exist yet) — but don't let it leak or apply to a later
           // re-detection if it somehow does.
           pendingPre.delete(fp);
+          submitSnapshots.delete(fp);
           return;
         }
         if (!record) return;
         pendingPre.delete(fp); // consumed — the join above already used it
+        submitSnapshots.delete(fp);
+        if (mode === 'quick') {
+          // QUICK: zero mandatory interaction. Correct gets no toast at
+          // all; incorrect gets the passive captured pill (autoCaptureMiss
+          // above already logged/merged the miss) — notes are opt-in via
+          // the pill/N key, never prompted.
+          if (outcome === 'incorrect') showCapturedPill(fp, data.qnum);
+          return;
+        }
         if (pending) {
           // Pre-rating present: correct gets no toast at all (the rating
           // is already recorded); incorrect gets the slim toast.
@@ -287,7 +358,11 @@
       seconds,
       confidence: pending ? pending.confidence : null,
       confNum: pending ? pending.confNum : null,
-      confAt: pending ? confAt : null
+      confAt: pending ? confAt : null,
+      // Capture mode this miss was auto-captured under, v0.21.0 — the
+      // module-level `mode`, same value just stamped onto the sibling
+      // outcome record above.
+      mode
     })
       .then(({ miss }) => {
         // Pre-rated 'didnt-know' keeps the same auto-classification the
@@ -621,6 +696,36 @@
     .corner-back { left: 6px; }
     .x:hover, .corner-back:hover { color: var(--toast-fg); background: color-mix(in srgb, var(--toast-fg) 10%, transparent); }
     .x:focus-visible, .corner-back:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
+
+    /* v0.21.0 — QUICK mode's compact pill, the two OPTIONAL touchpoints
+       (digit-before-Check flash, post-miss "captured" confirmation).
+       Docked just above where the toast variants sit (.toast bottom:76px)
+       so the two never visually collide on the rare tick they'd both be up
+       — see the hidePill() calls in showToast/showGateToast/showSlimToast,
+       which are the actual mechanism that keeps them apart in practice.
+       No delayed entrance (unlike .toast's 400ms change-blindness delay):
+       the pill is a direct response to the user's OWN keypress or to a
+       miss that was just captured, never a passively-arriving banner. */
+    .pill {
+      position: fixed; right: 16px; bottom: 132px;
+      z-index: 2147483645;
+      display: flex; align-items: center;
+      background: var(--toast-bg); color: var(--toast-fg);
+      border: 1px solid color-mix(in srgb, var(--toast-fg) 14%, transparent);
+      border-left: 4px solid var(--toast-accent);
+      border-radius: var(--radius);
+      box-shadow: 0 10px 26px rgba(0,0,0,.3);
+      padding: 7px 12px; font-family: var(--mono); font-size: 12px; font-weight: 600;
+      cursor: default; pointer-events: auto;
+    }
+    .pill[hidden] { display: none; }
+    /* Only the CAPTURED pill is clickable (the flash pill is a passive
+       digit echo, nothing to click) — toggled via this class rather than
+       always-interactive so the flash variant doesn't invite a click that
+       does nothing. */
+    .pill.captured { cursor: pointer; }
+    .pill.captured:hover { background: color-mix(in srgb, var(--toast-accent) 14%, var(--toast-bg)); }
+    .pill.captured:focus-visible { outline: 2px solid var(--toast-accent); outline-offset: 2px; }
   `;
 
   const ALL_CONFIDENCE_VALS = ['knew', 'narrowed', 'guessed', 'memorized', 'intuition', 'didnt-know', 'slip'];
@@ -790,6 +895,9 @@
           <button type="button" class="details-link" id="slimDetails">details</button>
         </div>
         <button type="button" class="x" id="slimX" title="Close — anything already recorded stays">×</button>
+      </div>
+      <div class="pill" id="pill" hidden role="status" aria-live="polite">
+        <span id="pillText"></span>
       </div>`;
     shadow.appendChild(wrap);
 
@@ -879,6 +987,13 @@
       }
     });
 
+    // v0.21.0 — QUICK mode's pill. Only the CAPTURED state (see
+    // showCapturedPill) is meant to react to a click — openPillNote()
+    // itself no-ops when the pill isn't currently in that state, so this
+    // one listener covers both variants without needing to be
+    // added/removed as the pill's content changes.
+    shadow.getElementById('pill').addEventListener('click', openPillNote);
+
     return shadow;
   }
 
@@ -902,6 +1017,19 @@
     if (g) g.hidden = true;
     const s = toastShadow.getElementById('toastSlim');
     if (s) s.hidden = true;
+  }
+
+  /** True when none of {#toast, #toastGate, #toastSlim} is visible — the
+   *  v0.21.0 pill deliberately does NOT count here (see its own doc
+   *  comment: it coexists with "no toast up" by design). Used by the
+   *  QUICK-mode digit-key handler below to avoid stealing a digit that's
+   *  meant for a currently-open toast's own stage/scale/gate keys. */
+  function noToastVariantVisible() {
+    if (!toastShadow) return true;
+    const t = toastShadow.getElementById('toast');
+    const g = toastShadow.getElementById('toastGate');
+    const s = toastShadow.getElementById('toastSlim');
+    return (!t || t.hidden) && (!g || g.hidden) && (!s || s.hidden);
   }
 
   /**
@@ -936,6 +1064,7 @@
   function showToast(fp, outcome, data) {
     ensureToast();
     hideAllToastVariants();
+    hidePill(); // v0.21.0 — a full toast replaces the pill's job; see its own doc comment
     toastFp = fp;
     toastOutcome = outcome;
     toastData = data;
@@ -1261,7 +1390,12 @@
           confNum,
           confAt: 'post',
           qnum: (data && data.qnum) ?? null,
-          qtotal: (data && data.qtotal) ?? null
+          qtotal: (data && data.qtotal) ?? null,
+          // This toast only ever runs in deep mode (quick mode never shows
+          // it — see handleCandidate's mode branch), so `mode` here is
+          // always 'deep' in practice; stamped from the module-level var
+          // rather than hardcoded so it stays correct if that ever changes.
+          mode
         }).catch((e) => console.debug('[Cert Buddy] correct-capture addMiss failed', e))
       );
     }
@@ -1331,6 +1465,15 @@
   // matching outcome fires — see handleCandidate's outcome join above.
   const pendingPre = new Map();
 
+  // fp -> seconds-since-first-sighted, snapshotted at the INSTANT the
+  // site's own submit control was clicked — v0.21.0, both modes. Deep
+  // mode's gate used to compute this itself (see showGateToast); now it's
+  // taken once in onDocumentClickCapture regardless of mode, so quick
+  // mode's un-gated click still gets an accurate seconds-at-submit
+  // reading for handleCandidate to prefer over a live re-measurement.
+  // Consumed (deleted) the moment the matching outcome resolves.
+  const submitSnapshots = new Map();
+
   // Fixed order/keys, per spec — unlike the outcome toast's dialects, the
   // gate always shows the SAME 6 buttons in the SAME order every time, so
   // no per-instance reshuffling (applyDialect-style) is needed here.
@@ -1371,6 +1514,7 @@
   function showGateToast(fp, el, secondsAtSubmit) {
     ensureToast();
     hideAllToastVariants();
+    hidePill(); // v0.21.0 — see showToast's own comment
     gateFp = fp;
     gateEl = el;
     gateSecondsAtSubmit = secondsAtSubmit;
@@ -1468,13 +1612,24 @@
       if (!matchedEl) return;
 
       const { fp } = extractCurrentQuestionFp();
-      if (!fp || preHandledFps.has(fp)) return;
+      if (!fp) return;
+
+      // v0.21.0 — snapshot seconds-at-submit for BOTH modes, the instant
+      // the site's own submit control is clicked, regardless of whether
+      // the gate itself goes on to engage. handleCandidate prefers this
+      // over its own live re-measurement — see its own comment.
+      submitSnapshots.set(fp, computeSecondsSince(fp));
+
+      // QUICK mode: zero mandatory interaction — let the click proceed to
+      // the site's own handler untouched. No preventDefault, no gate.
+      if (mode !== 'deep') return;
+
+      if (preHandledFps.has(fp)) return;
 
       e.preventDefault();
       e.stopImmediatePropagation();
       engaged = true;
-      const secondsAtSubmit = computeSecondsSince(fp);
-      showGateToast(fp, matchedEl, secondsAtSubmit);
+      showGateToast(fp, matchedEl, submitSnapshots.get(fp));
     } catch (err) {
       console.debug('[Cert Buddy] submit gate error', err);
       if (engaged && matchedEl) releaseGateClick(matchedEl);
@@ -1490,9 +1645,10 @@
   let slimFp = null;
   let slimSillyOn = false; // whether THIS toast's own setReasonIfEmpty('misread') call is currently standing
 
-  function showSlimToast(fp) {
+  function showSlimToast(fp, { immediate = false } = {}) {
     ensureToast();
     hideAllToastVariants();
+    hidePill(); // v0.21.0 — see showToast's own comment
     slimFp = fp;
     slimSillyOn = false;
     const input = toastShadow.getElementById('slimInput');
@@ -1500,10 +1656,16 @@
     toastShadow.getElementById('slimSilly').classList.remove('flash');
     const el = toastShadow.getElementById('toastSlim');
     el.hidden = true;
-    // Same 400ms change-blindness delay as the full post-outcome toast
-    // (showToast) — this toast is likewise triggered by a passively-
-    // arriving banner, not a direct click.
     clearTimeout(toastTimer);
+    // Same 400ms change-blindness delay as the full post-outcome toast
+    // (showToast) when triggered by a passively-arriving banner — but the
+    // quick-mode note pill (openPillNote) is a DIRECT click/keypress, and
+    // a delayed response to a click reads as "nothing happened".
+    if (immediate) {
+      el.hidden = false;
+      input.focus();
+      return;
+    }
     toastTimer = setTimeout(() => {
       el.hidden = false;
     }, 400);
@@ -1568,6 +1730,85 @@
     hideSlimToast();
   }
 
+  /* ------------------------------------------------------------------ *
+   * Feature 5 (v0.21.0) — QUICK-mode pill                               *
+   *                                                                      *
+   * The two OPTIONAL touchpoints quick mode offers in place of the       *
+   * gate/toast: (a) a digit pressed before Check briefly flashes the     *
+   * number back (see the keydown handler below, which builds this via   *
+   * showFlashPill); (b) once an incorrect outcome auto-captures a miss,  *
+   * a small "captured" pill appears — clicking it, or pressing N while   *
+   * it's up, opens the SAME slim toast deep mode's pre-rated wrong       *
+   * answers already use, so a note stays entirely opt-in, never          *
+   * prompted. A new captured pill replaces any pending flash/captured    *
+   * timer (see showCapturedPill/showFlashPill both starting with         *
+   * clearTimeout(pillTimer)). Coexists with the toast variants —         *
+   * hideAllToastVariants deliberately does NOT touch it (see its own     *
+   * doc comment) — the toast-showing functions call hidePill()           *
+   * themselves instead, since a full toast taking over is the only time  *
+   * the two would otherwise overlap.                                     *
+   * ------------------------------------------------------------------ */
+
+  let pillTimer = null;
+  // Set ONLY while the CAPTURED (interactive) pill is up — null the rest
+  // of the time, including while the FLASH pill is up. openPillNote()
+  // gates on this, so a click/N-press on a flash pill (or on no pill at
+  // all) is a clean no-op rather than opening a slim toast for the wrong
+  // (or no) fp.
+  let pillFp = null;
+
+  function hidePill() {
+    clearTimeout(pillTimer);
+    pillFp = null;
+    if (!toastShadow) return;
+    const p = toastShadow.getElementById('pill');
+    if (p) {
+      p.hidden = true;
+      p.classList.remove('captured');
+    }
+  }
+
+  /** Digit pressed before Check, quick mode only (see the keydown handler
+   *  below) — a passive echo of what was just recorded, no click
+   *  behavior, hides itself. */
+  function showFlashPill(text) {
+    ensureToast();
+    pillFp = null;
+    clearTimeout(pillTimer);
+    const p = toastShadow.getElementById('pill');
+    p.classList.remove('captured');
+    toastShadow.getElementById('pillText').textContent = text;
+    p.hidden = false;
+    pillTimer = setTimeout(() => {
+      p.hidden = true;
+    }, 300);
+  }
+
+  /** A miss was just auto-captured (quick mode, incorrect outcome) —
+   *  offers an on-demand note via click or the N key for 4s, then hides
+   *  on its own. Never a prompt: the user drives this entirely. */
+  function showCapturedPill(fp, qnum) {
+    ensureToast();
+    pillFp = fp;
+    clearTimeout(pillTimer);
+    const p = toastShadow.getElementById('pill');
+    p.classList.add('captured');
+    toastShadow.getElementById('pillText').textContent = Number.isFinite(qnum) ? `captured · #${qnum}` : 'captured';
+    p.hidden = false;
+    pillTimer = setTimeout(hidePill, 4000);
+  }
+
+  /** Click on the captured pill, or the N key while it's visible (see the
+   *  window keydown handler below) — opens the same slim toast deep
+   *  mode's pre-rated wrong answers use, so notes stay on-demand. No-op
+   *  when pillFp isn't set (the flash pill, or no pill at all). */
+  function openPillNote() {
+    if (!pillFp) return;
+    const fp = pillFp;
+    hidePill();
+    showSlimToast(fp, { immediate: true });
+  }
+
   window.addEventListener(
     'keydown',
     (e) => {
@@ -1578,6 +1819,39 @@
       // event before that handler runs). Checked once, up front, for every
       // branch below (gate included).
       if (isTypingTarget(e)) return;
+
+      // v0.21.0 — captured-pill note shortcut, checked before everything
+      // else: N (either case) opens the slim toast for the miss the pill
+      // is currently showing. pillFp is only ever non-null while the
+      // CAPTURED (interactive) pill variant is actually visible — see
+      // showCapturedPill/hidePill — so this is naturally a no-op the rest
+      // of the time, no extra visibility check needed.
+      if (pillFp && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        openPillNote();
+        return;
+      }
+
+      // v0.21.0 — QUICK-mode optional digit pre-rating: a bare digit
+      // pressed before Check, with no toast variant currently up (the
+      // pill doesn't count — see noToastVariantVisible), pre-rates the
+      // CURRENT on-screen question's confidence number ahead of time.
+      // Overwritable — last key wins, same as re-picking on the deep-mode
+      // gate — so a fat-finger is correctable right up until the outcome
+      // consumes it in handleCandidate. Deliberately NOT added to
+      // preHandledFps: quick mode never gates on that set, it's deep-mode-
+      // only bookkeeping.
+      if (mode === 'quick' && noToastVariantVisible()) {
+        const n = SCALE_KEYS[e.key];
+        if (n) {
+          const { fp } = extractCurrentQuestionFp();
+          if (!fp) return;
+          pendingPre.set(fp, { confidence: null, confNum: n, secondsAtSubmit: null, ts: Date.now() });
+          e.preventDefault();
+          showFlashPill(String(n));
+          return;
+        }
+      }
 
       // v0.20.0 — pre-submit gate toast keys, checked first: it's a
       // distinct modal from the outcome toast below, and the two are

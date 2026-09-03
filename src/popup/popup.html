@@ -11,7 +11,13 @@
         <h1 class="wordmark">cert_buddy<span class="cursor" aria-hidden="true">▮</span></h1>
         <p class="sub" id="subline">Loading…</p>
       </div>
-      <button class="ghost" id="expand" title="Open in a full tab">⤢</button>
+      <div class="top-actions">
+        <div class="mode-toggle" role="group" aria-label="Capture mode">
+          <button type="button" data-mode="quick" title="Quickfire: no prompts, digit-before-Check optional, click the pill to add a note">quick</button>
+          <button type="button" data-mode="deep" title="Deep: pre-submit gate + full toasts">deep</button>
+        </div>
+        <button class="ghost" id="expand" title="Open in a full tab">⤢</button>
+      </div>
     </header>
 
     <div class="tabbar" id="notUdemyBar" hidden>

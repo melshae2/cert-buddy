@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Practice Exam Review | Udemy (fixture)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; background: #fff; color: #1a1a1a; }
+  [data-purpose="answer"] { border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+  [class*="answer-result-pane--correct"] { background: #e6f7ea; border-color: #34a853; }
+  [class*="answer-result-pane--incorrect"] { background: #fdecea; border-color: #d93025; }
+  aside[class*="sidebar"] { background: #f5f5f5; padding: 10px; margin-top: 20px; }
+  .controls { position: sticky; top: 0; background: #fff; padding: 10px 0; border-bottom: 2px solid #333; margin-bottom: 16px; z-index: 5; }
+  .controls button { margin-right: 8px; padding: 6px 12px; cursor: pointer; }
+  #resultBanner[role="alert"] { padding: 10px 14px; border-radius: 6px; font-weight: 600; margin: 12px 0; background: #fdecea; color: #a02622; border: 1px solid #d93025; }
+</style>
+</head>
+<body>
+<h1>AWS Certified Solutions Architect &ndash; Professional Practice Exams &mdash; Question 7 of 75</h1>
+<div class="controls">
+  <strong>Harness controls:</strong>
+  <button id="btnShowResult">Show result</button>
+</div>
+<!-- Both wrapped in one shared parent (#questionBlock) so adapters.js's stemAbove() walk stops at the first level with siblings (question-content) and never climbs to the page h1/controls. -->
+<div id="questionBlock">
+  <div data-purpose="question-content">
+    <p>A team needs the solution with the LEAST operational overhead to run a containerized batch workload that scales to zero when idle. Which service should they choose?</p>
+  </div>
+  <div id="answersWrap">
+    <div data-purpose="answer">
+      <span data-purpose="answer-body">Amazon EC2 Auto Scaling with a minimum of 1 instance</span>
+    </div>
+    <div data-purpose="answer" class="answer-result-pane--incorrect--kL91z">
+      <span data-purpose="answer-result-header-user-label">Your answer</span>
+      <span data-purpose="answer-body">Amazon ECS on EC2 launch type</span>
+    </div>
+    <div data-purpose="answer" class="answer-result-pane--correct--pQ44w">
+      <span data-purpose="answer-body">AWS Fargate</span>
+    </div>
+    <div data-purpose="answer">
+      <span data-purpose="answer-body">Self-managed Kubernetes on EC2</span>
+    </div>
+  </div>
+</div>
+<div id="resultBanner" role="alert" style="display:none;"></div>
+<aside class="sidebar">
+  <p>Course sidebar decoy (must be excluded via inNav)</p>
+  <div data-purpose="questions-list">65 questions total, sidebar text every one</div>
+</aside>
+<script src="mock-chrome.js?v=2101"></script>
+<script src="../../src/lib/store.js?v=2101"></script>
+<script src="../../src/lib/taxonomy.js?v=2101"></script>
+<script src="../../src/lib/theme.js?v=2101"></script>
+<script src="../../src/content/adapters.js?v=2101"></script>
+<script>
+  // adapters.js has no location-independent override for the Udemy adapter
+  // (unlike tutorialsDojoAdapter's globalThis.__certBuddyForceTutorialsDojo)
+  // — udemyAdapter.match() checks loc.hostname directly against
+  // /(^|\.)udemy\.com$/i, which "localhost" never satisfies. Left alone, the
+  // central Adapters.extract() dispatcher would silently fall through to
+  // genericAdapter here — which has no [data-purpose] heuristics at all, so
+  // it mis-extracts yourAnswer/yourAnswers as empty and the question stem as
+  // the whole merged block instead of just the stem. Since editing
+  // adapters.js is out of scope for this harness, this monkey-patches the
+  // udemy entry's own match() via CertBuddyAdapters.adapters — public API,
+  // "exposed so you can test one from the console" per adapters.js's own
+  // comment — the same effect __certBuddyForceTutorialsDojo has for the TD
+  // adapter, applied from outside since no such flag exists for Udemy. Must
+  // run strictly between adapters.js and outcomes.js: outcomes.js calls
+  // Adapters.extract() once synchronously at load (startObserving ->
+  // maybeNoteSighting), so the override has to already be in place before
+  // that script tag runs.
+  (function () {
+    const udemy = window.CertBuddyAdapters.adapters.find((a) => a.name === 'udemy');
+    if (udemy) udemy.match = () => true;
+  })();
+</script>
+<script src="../../src/content/outcomes.js?v=2101"></script>
+<script src="../../src/content/tagger.js?v=2101"></script>
+<script>
+(function () {
+  // A genuine childList mutation (fresh node ADDED), matching Udemy's real behavior and the addedNodes MutationObserver path.
+  document.getElementById('btnShowResult').addEventListener('click', () => {
+    const old = document.getElementById('resultBanner');
+    const fresh = document.createElement('div');
+    fresh.id = 'resultBanner';
+    fresh.setAttribute('role', 'alert');
+    fresh.textContent = 'Incorrect answer.';
+    old.remove();
+    document.getElementById('answersWrap').insertAdjacentElement('afterend', fresh);
+  });
+})();
+</script>
+</body>
+</html>

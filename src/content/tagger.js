@@ -42,6 +42,21 @@
     }
     .buddy-h { width: 18px; height: 18px; vertical-align: -4px; margin-right: 6px; }
     .launcher[hidden] { display: none; }
+    /* Capture-mode indicator, v0.21.0 — purely visual, no click behavior of
+       its own (a click anywhere on .launcher still just opens the panel).
+       Positioned against .launcher's own position:fixed (already a
+       valid containing block for an absolutely-positioned child, same
+       trick outcomes.js's toast corner buttons use). Shown only in QUICK
+       mode; deep mode hides it, matching today's plain launcher exactly. */
+    .mode-badge {
+      position: absolute; top: -4px; left: -4px;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--accent); color: var(--accent-ink);
+      font-size: 11px; line-height: 18px; text-align: center;
+      box-shadow: 0 0 0 2px #fff;
+      pointer-events: none;
+    }
+    .mode-badge[hidden] { display: none; }
 
     .panel {
       position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;
@@ -225,7 +240,7 @@
 
   const wrap = document.createElement('div');
   wrap.innerHTML = `
-    <button class="launcher" id="launcher" title="Log a miss (⌥M / Alt+M)" aria-label="Log a miss"><img class="buddy" src="${BUDDY_URI}" alt=""></button>
+    <button class="launcher" id="launcher" title="Log a miss (⌥M / Alt+M)" aria-label="Log a miss"><img class="buddy" src="${BUDDY_URI}" alt=""><span class="mode-badge" id="modeBadge" hidden>⚡</span></button>
     <div class="toast" id="toast" hidden></div>
     <section class="panel compact" id="panel" hidden role="dialog" aria-label="Log a missed question">
       <header>
@@ -867,6 +882,26 @@
       launcher.hidden = true;
     }
   });
+
+  // Capture-mode badge, v0.21.0 — purely visual (no click behavior of its
+  // own; see the .mode-badge CSS comment above). Read once at init and
+  // kept live via chrome.storage.onChanged, same guarded pattern as
+  // outcomes.js's own mode subscription — a stub chrome with no onChanged
+  // (the test harness) is a silent no-op rather than a load-time throw.
+  // Deliberately not stored in a `mode`-named variable: this file already
+  // has a `mode` for the panel's own 'compact'/'full' LAYOUT state (see
+  // setMode above), an unrelated concept that happens to share the obvious
+  // name.
+  function applyModeBadge(m) {
+    $('modeBadge').hidden = m !== 'quick';
+  }
+  Store.getMode().then(applyModeBadge);
+  const modeOc = globalThis.chrome && chrome.storage && chrome.storage.onChanged;
+  if (modeOc && modeOc.addListener) {
+    modeOc.addListener((changes, area) => {
+      if (area === 'local' && changes[Store.KEY]) Store.getMode().then(applyModeBadge);
+    });
+  }
 
   /**
    * When the question lives in an embedded player, both the shell and the

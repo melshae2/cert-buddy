@@ -1012,6 +1012,21 @@
     window.close();
   });
 
+  // v0.21.0 capture-mode toggle. No full load()/render() needed on a
+  // click — just re-mark which segment is active, same "cheap local
+  // update" shape as switchTab's active-class toggling above.
+  const modeToggleButtons = document.querySelectorAll('.mode-toggle button');
+  const markActiveMode = (m) => {
+    modeToggleButtons.forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+  };
+  Store.getMode().then(markActiveMode);
+  modeToggleButtons.forEach((b) => {
+    b.addEventListener('click', async () => {
+      const m = await Store.setMode(b.dataset.mode);
+      markActiveMode(m.mode);
+    });
+  });
+
   $('export').addEventListener('click', async () => {
     await exportNow();
     $('dataMsg').textContent = `Exported ${misses.length} questions.`;
