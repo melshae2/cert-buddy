@@ -1,129 +1,156 @@
-# cert_buddy
+# Cert Buddy
 
-A Chrome extension that tracks the practice-exam questions you miss, tagged in
-place while you study. Built for AWS SAP-C02 prep on Udemy; the taxonomy is
-swappable.
+<img src="icons/icon128.png" alt="Cert Buddy mascot" width="96" align="right">
 
-**Design rules the whole thing follows:** capture and learning are separate
-moments — flag a miss in ~3 seconds mid-exam, learn from it later, clustered by
-topic, never question-by-question. Local-only: no backend, no login, no sync.
-When in doubt, less UI.
+A Chrome extension that tracks the practice-exam questions you miss, captured
+automatically while you take the exam, then shows you which topics are costing
+you points. No account, no server: everything stays in your browser.
+
+I built it while preparing for the **AWS Certified Solutions Architect –
+Professional (SAP-C02)** exam, which I passed in October 2026. It tracked about
+570 practice questions across Tutorials Dojo and Udemy, saved a one-line "why I
+missed it" note on almost every miss, and turned a score like 52/75 into a
+short list of topics to fix.
+
+| Quick mode: misses are captured silently | Deep mode: rate your confidence before the reveal |
+| --- | --- |
+| ![A missed question with the "captured" pill](docs/screenshots/quick.png) | ![The "how sure?" prompt shown before the answer is revealed](docs/screenshots/gate.png) |
+
+| Dashboard | Insights |
+| --- | --- |
+| ![Popup dashboard with debrief, focus topics, and weak areas](docs/screenshots/dashboard.png) | ![Insights view with confidence calibration and accuracy by topic](docs/screenshots/insights.png) |
+
+## What it does
+
+- **Captures every miss automatically.** When the practice site reveals an
+  answer, Cert Buddy saves the question, your answer, the correct answer, the
+  AWS topics involved, the phrase the question turns on ("MOST cost-effective",
+  "LEAST operational overhead"), the question number, and how long you spent on
+  it. Multi-select questions get partial credit (1/2).
+- **Two capture modes**, switched from the popup header:
+  - **Quick** (default) never interrupts you. Optionally tap a digit before you
+    check your answer to log a gut confidence (1–9, 0 = 10). When a miss is
+    captured, a small pill appears for a few seconds: click it or press **N**
+    to jot down why.
+  - **Deep** asks how sure you are *before* the answer is revealed: memorized,
+    know it, intuition, between two, guessed, or didn't know, plus a 1–10
+    scale. It holds your click until you answer, so the rating is a real
+    prediction rather than a guess made after seeing the result. On a miss, it
+    asks why.
+- **Turns misses into a study plan.** After a set, the popup groups your misses
+  by topic, ranks your weak areas, lists facts you marked to memorize, and
+  flags questions you keep missing. On a retake, **✓ got it right** cools that
+  topic; missing it again flags a regression.
+- **Shows whether your confidence is calibrated.** The full-tab view (⤢)
+  compares how sure you said you were with how often you were actually right,
+  shows accuracy by topic, and marks topics where your correct answers were
+  mostly memorized rather than understood.
 
 ## Install
 
-1. `chrome://extensions` → **Developer mode** on → **Load unpacked** → select
-   this folder
-2. Pin the icon. Reload the extension (⟳ on its card) after any code change,
-   then reload the study tab — content scripts inject at page load.
+Cert Buddy isn't on the Chrome Web Store yet, so you load it directly:
 
-Runs automatically on `udemy.com` only. On any other site, the popup offers
-**"Enable logging on this page"** (one-time, per-tab, via activeTab).
+1. Download this repo: **Code → Download ZIP** and unzip it, or run
+   `git clone https://github.com/melshae2/cert-buddy.git`.
+2. Open `chrome://extensions`, turn on **Developer mode**, click **Load
+   unpacked**, and select the folder.
+3. Pin the extension, then open a practice exam.
 
-## During a practice set
+After updating the code, click ⟳ on the extension's card and reload the exam
+tab.
 
-**Miss a question →** press **⌥M** (Option+M; Alt+M elsewhere) or click the
-**⚑ Log miss** badge. The compact panel auto-captures the question, your
-answer, the correct answer, topics, and the stem *discriminator* (the
-"MOST cost-effective" / "LEAST operational overhead" phrase the question turns
-on). You supply exactly one required tap and one optional sentence:
+## Supported sites
 
-- **Why you missed it** (required, ⌥1/⌥2/⌥3): `never learned` /
-  `knew it, couldn't recall` / `misread` — each routes to a different fix
-  (study / spaced review / technique)
-- **"Why did you get this wrong?"** — one honest sentence, optional
-- **guessed it (got it right)** toggle — for lucky guesses: score says pass,
-  knowledge says miss
-- **⌘Enter** saves. "save without reason" escape-hatch marks it untriaged.
-- **Expand** reveals the full form (edit answers/topics, fact to memorize, exam)
+| Site | Status |
+| --- | --- |
+| Tutorials Dojo practice exams (`portal.tutorialsdojo.com`) | Fully supported. This is where I used it most. |
+| Udemy practice tests | Misses and results are captured. Question numbers usually aren't, and Deep mode's before-the-reveal prompt isn't verified on Udemy yet, so there it falls back to asking after the reveal. |
+| Other sites | Open the popup and click **Enable logging on this page** to try a generic extractor. Results vary. |
 
-Auto-tagging is suggest-and-veto: solid chips are applied (topic scored in the
-correct answer or two fields), dashed **+chips** are one-tap suggestions.
+## Using it
 
-**Answer any question →** the outcome is logged passively (see below); a small
-toast asks `knew it (1) / unsure (2) / guessed (3)` — tap or keypress, or
-ignore it (auto-dismisses, 8s).
+**During a set.** Answer questions as usual. In Quick mode that's all you have
+to do. Keyboard shortcuts:
 
-## After the set — the debrief
+| Key | Does |
+| --- | --- |
+| `1`–`9`, `0` | Before checking your answer (Quick mode): log confidence 1–10 |
+| `N` | While the "captured" pill shows: write why you missed it |
+| `⌥M` / `Alt+M` | Open the full capture panel: edit answers and topics, pick a reason, add a fact to memorize |
 
-Open the popup. Misses logged within 90 minutes group into a **session**; the
-debrief card shows them clustered by topic ("4 misses → 2 topics") with your
-one-line notes lined up under each cluster. Review cluster-by-cluster, add a
-fact or reason where it earns it, **mark cluster reviewed**. The card retires
-when everything's triaged.
+**After a set.** Open the popup. Misses logged within 90 minutes of each other
+form a session, and the debrief card shows that session clustered by topic
+with your notes underneath. Review cluster by cluster, not question by
+question. The tabs below hold your weak areas, a searchable list of every
+record, and your data.
 
-Below it:
-- **Focus card** — top 3 topics by recency-weighted misses (14-day half-life),
-  your notes quoted under each; a **Memorize** list built from your logged
-  facts; **Stubborn questions** (missed 3+, no right since) with retake links;
-  a warning when several recent misses turned on the same discriminator
-- **Weak areas** — attempt-weighted topic ranking (top 6, expandable), plus
-  collapsed "why you miss them" and "what questions turn on" breakdowns
-- **Recent** — every record, searchable, inline-editable, with repeat/guessed/✓
-  pills. **✓ got it right** on retakes cools the topic and graduates the
-  question; re-missing a conquered question flags **REGRESSION**
-- **Data** — export/import JSON, snapshots, delete-with-undo
+## Your data
 
-## Data model (schema v2)
+- Everything is stored in `chrome.storage.local` in your browser. There is no
+  account, no server, and no analytics, and the extension makes no network
+  requests.
+- **Permissions:** `storage` to save records; host access to `udemy.com` and
+  `tutorialsdojo.com` to run on those sites; `activeTab` and `scripting` only
+  when you click "Enable logging on this page" somewhere else.
+- **Export is your backup.** Uninstalling the extension or clearing browser
+  data deletes everything. Export JSON from the **Data** tab; the popup reminds
+  you after 10 unexported misses and then every 14 days. A daily snapshot
+  inside storage guards against corruption, not deletion.
+- **Tip:** the export is plain JSON built to be analyzed. Give it to an AI
+  assistant and ask which topics, question types, or confidence levels are
+  costing you points. That's how I reviewed my sets.
 
-One key in `chrome.storage.local`: `certbuddy.v1`.
+## Known limitations
 
-- `misses[]` — id, ts, attempts[], rights[], fp (question fingerprint), exam,
-  host/url, question, yourAnswer, correctAnswer, topics[], reason, disc,
-  notes, fact, confidence, triaged, shaky
-- `outcomes[]` — passive per-question log: fp, questionSnippet, outcome
-  (`correct`/`incorrect`), confidence, exam, ts, attempts[], url. Written
-  automatically when a result banner is detected; deduped by fingerprint,
-  first outcome wins. Gives per-topic accuracy denominators.
-- `backups[]` — last 3 daily in-storage snapshots (guards against corruption,
-  not profile wipe). A JSON export auto-downloads weekly; **export is the only
-  real backup.**
+- **The topic list is for AWS SAP-C02.** On other exams, misses, notes, and
+  confidence still record, but automatic topic tagging won't match and
+  untagged misses don't appear in Weak areas. Support for other exams is the
+  next planned feature.
+- **It depends on each site's page structure.** A site redesign can break
+  capture until the extractor in `src/content/adapters.js` is updated.
+- Tested in Chrome. Other Chromium browsers (Edge, Brave) should work but
+  haven't been tested.
 
-Legacy records migrate on read (old 7-bucket reasons → 3, missing fields
-backfilled). Import merges by id/fp; re-importing the same file is a no-op.
+## How it works
 
-## How extraction works (and how to fix it when Udemy changes)
+- **Per-site extractors** (`src/content/adapters.js`) read questions and
+  answers from stable page hooks rather than generated class names. They only
+  read *visible* elements, because both sites keep earlier questions hidden in
+  the page.
+- **Outcome detection** (`src/content/outcomes.js`) watches the page for the
+  site's correct/incorrect result appearing, so nothing depends on you
+  clicking a button.
+- **Fingerprinting** (`src/lib/store.js`) identifies a question by its
+  normalized text, so retaking a question merges into one record with a
+  history of attempts instead of creating duplicates.
 
-`src/content/adapters.js`. The Udemy adapter matches semantic hooks — never
-exact hashed class names: `[data-purpose="answer"]`, `data-purpose`
-attributes, class *tokens* like `--correct--`, then visible badge text as a
-fallback, then generic heuristics. Hard-won rules encoded there:
+The commit history doubles as a changelog: each version's commit message
+explains what changed and why.
 
-- the question sidebar carries every question's full text and per-question
-  Correct/Incorrect labels — everything is filtered through a nav/footer
-  exclusion first
-- the page wrapper has "sidebar" in its class name — a container *holding* the
-  answer rows is never treated as nav
-- only **visible** elements can anchor extraction — the SPA keeps previous
-  questions in the DOM, hidden, and document-order anchoring reads stale
-  questions (and mis-attributes outcome fingerprints)
-- checked inputs are sidebar filters, not answers; options aren't radios
+## Development
 
-The panel header shows which path ran (`via udemy adapter · v0.10.1`). If it
-ever shows `+generic(...)`, a field fell back to guessing — run
-`CertBuddyAdapters.extract()` in the console (context dropdown → Cert Buddy)
-and tighten selectors against what you see. Highlighting text before ⌥M always
-overrides detection.
+There's no build step. To run the tests, serve the repo root:
 
-## Retargeting another cert
+```bash
+python3 -m http.server 8642
+```
 
-Replace `TOPICS` in `src/lib/taxonomy.js` (id, label, category, aliases) and
-optionally `DISCRIMINATORS`. Nothing else hardcodes AWS.
-
-## Deliberately not built
-
-- Spaced repetition — `fact` + `attempts[]` + `confidence` are the scheduling
-  inputs, waiting on enough real data
-- Any backend/sync — gated on: weeks of real use → a friend uses it unprompted
-  → someone asks for sync
-
-## Files
+Then open `http://localhost:8642/tests/test.html` for the pure-function suite,
+or the fixture pages under `tests/harness/` to drive the content scripts
+against mock Tutorials Dojo and Udemy pages (see `tests/harness/README.md`).
 
 | Path | Job |
 | --- | --- |
-| `manifest.json` | MV3; permissions: storage, scripting, activeTab; udemy.com only |
-| `src/lib/store.js` | storage, fingerprint dedupe, sessions, focus ranking, outcomes, backups |
-| `src/lib/taxonomy.js` | topics + aliases, weighted auto-tagger, reasons, discriminators |
-| `src/content/adapters.js` | page extraction (question/answers/discriminator) |
-| `src/content/outcomes.js` | passive outcome logging + confidence toast |
-| `src/content/tagger.js` | ⌥M compact capture panel (shadow DOM) |
-| `src/popup/` | dashboard: debrief, focus card, weak areas, recent, data |
+| `manifest.json` | Manifest V3; runs on Udemy and Tutorials Dojo |
+| `src/lib/store.js` | Storage, fingerprinting, sessions, rankings, backups |
+| `src/lib/taxonomy.js` | Topics and aliases, auto-tagger, reasons, discriminators |
+| `src/lib/theme.js` | Shared design tokens for the in-page UI |
+| `src/content/adapters.js` | Per-site question and answer extraction |
+| `src/content/outcomes.js` | Outcome detection, capture modes, confidence prompts |
+| `src/content/tagger.js` | Launcher and ⌥M capture panel |
+| `src/popup/` | Dashboard and insights view |
+| `tests/` | Pure-function tests and the browser harness |
+
+## License
+
+[MIT](LICENSE)
